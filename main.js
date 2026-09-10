@@ -2134,9 +2134,24 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
     const normalize = value => String(value || '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
     const noteLabel = /AI\s*笔记|智能笔记|视频笔记|课程笔记|内容总结|知识总结/i;
 
+    const noteTabLabel = /^(AI\s*笔记|智能笔记|视频笔记|课程笔记|内容总结|知识总结)(?:\s*[\uff08(]\d+[\uff09)])?$/i;
+    const noteTab = Array.from(document.querySelectorAll('button, [role="tab"], [role="button"], span, div'))
+      .filter(visible)
+      .find(el => noteTabLabel.test(normalize(el.textContent)));
+    if (noteTab) {
+      const control = noteTab.closest('button, [role="tab"], [role="button"], a') || noteTab;
+      const state = normalize((control.getAttribute('aria-selected') || '') + ' ' + (control.getAttribute('aria-current') || '') + ' ' + (typeof control.className === 'string' ? control.className : ''));
+      if (!/(^|\s)(true|active|selected|current)(\s|$)/i.test(state)) {
+        try { control.click(); } catch (_) {}
+        await wait(900);
+      }
+    }
+
     const candidates = [];
+    const seenCandidates = new Set();
     const add = (el, source, bonus = 0) => {
-      if (!el) return;
+      if (!el || seenCandidates.has(el) || !visible(el)) return;
+      seenCandidates.add(el);
       const text = normalize(el.textContent);
       if (text.length < 24) return;
       const signature = normalize((el.id || '') + ' ' + (typeof el.className === 'string' ? el.className : ''));
@@ -2147,10 +2162,17 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
       if (cleanText.length < 24) return;
       const navigationNoise = ['视频', '笔记', 'AI看', '课件', '文稿', '选集查看全部'].filter(label => cleanText.includes(label)).length;
       if (navigationNoise >= 4) return;
-      const score = cleanText.length + bonus + (noteLabel.test(signature + ' ' + cleanText.slice(0, 120)) ? 800 : 0);
+      const structuredBlocks = clone.querySelectorAll('p, li, table, blockquote, h1, h2, h3, h4, h5, h6').length;
+      if (!noteLabel.test(signature + ' ' + cleanText.slice(0, 160)) && structuredBlocks < 2 && cleanText.length < 120) return;
+      const score = Math.min(cleanText.length, 6000) + bonus + (noteLabel.test(signature + ' ' + cleanText.slice(0, 160)) ? 800 : 0);
       candidates.push({ source, html: clone.innerHTML, text: cleanText, score });
     };
     document.querySelectorAll('.ql-editor, [data-testid*="ai-note-content" i], [class*="ai-note-content" i], [class*="ainote-content" i], [class*="smart-note-content" i]').forEach(el => add(el, el.matches('.ql-editor') ? 'fcb-editor' : 'verified-ai-note-content', el.matches('.ql-editor') ? 1600 : 800));
+    document.querySelectorAll('[class*="ai-note" i], [class*="ainote" i], [class*="smart-note" i], [class*="video-note" i], [id*="ai-note" i], [data-testid*="note" i]').forEach(el => add(el, 'video-page-note', 420));
+    for (const heading of Array.from(document.querySelectorAll('h1, h2, h3, h4, [role="tab"], button, span, div')).filter(el => visible(el) && noteTabLabel.test(normalize(el.textContent))).slice(0, 20)) {
+      let parent = heading.parentElement;
+      for (let depth = 0; parent && depth < 4; depth += 1, parent = parent.parentElement) add(parent, 'video-page-note-panel', 260 - depth * 40);
+    }
 
     const fcbUrls = new Set();
     const addFcb = raw => {
@@ -2707,14 +2729,14 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       const completeSource = ["player-text-track", "network-timed-text", "network-json", "media-extended-transcript"].includes(best.source);
       if (!best.plainText && (best.cues.length === 0 || !completeSource && best.cues.length < 5)) {
         if (allowMissing) {
-          await this.app.workspace.getLeaf(false).openFile(targetFile);
+          await this.openFileInNewTab(targetFile);
           return { source: "unavailable", cues: [], plainText: "" };
         }
         throw new Error("\u672A\u627E\u5230\u5B8C\u6574\u5B57\u5E55\u3002\u8BF7\u5728\u767E\u5EA6\u5927\u89C6\u9891\u9875\u5F00\u542F AI \u5B57\u5E55\uFF0C\u64AD\u653E 3\u20135 \u79D2\uFF1B\u5982 Media Extended \u663E\u793A\u201C\u6253\u5F00\u8F6C\u5F55\u6587\u7A3F\u201D\uFF0C\u4E5F\u53EF\u5148\u6253\u5F00\u540E\u91CD\u8BD5\u3002");
       }
       best.cues = normalizeOnlineCues(best.cues);
       await this.mergeOnlineSubtitlesIntoFile(targetFile, targetVideoUrl, best);
-      await this.app.workspace.getLeaf(false).openFile(targetFile);
+      await this.openFileInNewTab(targetFile);
       if (ownNotice) {
         ownNotice.hide();
         new import_obsidian4.Notice(best.cues.length ? `\u5DF2\u66F4\u65B0 ${best.cues.length} \u6761\u7F51\u9875\u5B57\u5E55\uFF08${subtitleSourceLabel(best.source)}\uFF09` : `\u5DF2\u66F4\u65B0\u767E\u5EA6\u7F51\u9875\u6587\u7A3F`, 7e3);
@@ -2860,7 +2882,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         const path = await this.createCourseNotePath(item.title, targetFolder);
         file = await this.app.vault.create(path, this.composeSubtitleNote(item, managed));
       }
-      await this.app.workspace.getLeaf(false).openFile(file);
+      await this.openFileInNewTab(file);
       notice.hide();
       new import_obsidian4.Notice(item.aiNote ? `\u5DF2\u5BFC\u5165 AI \u7B14\u8BB0\u548C ${item.cues.length} \u6761\u65F6\u95F4\u6233\u5B57\u5E55` : `\u672A\u5339\u914D\u5230 AI \u7B14\u8BB0\u7F13\u5B58\uFF1B\u5DF2\u5BFC\u5165 ${item.cues.length} \u6761\u5B57\u5E55`);
     } catch (error) {
@@ -3333,8 +3355,13 @@ ${END_MARKER}
     return file;
   }
   async openFileReplacingWebview(webview, file) {
-    const owner = this.findLeafForWebview(webview);
-    await (owner != null ? owner : this.app.workspace.getLeaf(false)).openFile(file);
+    await this.openFileInNewTab(file);
+  }
+  async openFileInNewTab(file) {
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file);
+    this.app.workspace.revealLeaf(leaf);
+    return leaf;
   }
   findLeafForWebview(webview) {
     let owner = null;
