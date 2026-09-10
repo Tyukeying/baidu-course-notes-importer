@@ -46,6 +46,7 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian4 = require("obsidian");
+var node_crypto = require("crypto");
 var node_fs = require("fs");
 var node_os = require("os");
 var node_path = require("path");
@@ -928,23 +929,67 @@ async function localizeImages(root2, options) {
   const folder = cleanVaultPath(options.attachmentsFolder || "");
   if (!folder) return;
   await ensureFolder(options.vault, folder);
+  const notePrefix = sanitizeFileName(options.noteTitle);
   for (let index = 0; index < images.length; index += 1) {
     const image = images[index];
     const src = image.getAttribute("src");
     if (!src || src.startsWith("data:") || src.startsWith("blob:")) continue;
     try {
+      const stableStem = `${notePrefix}-${shortHash(stableImageIdentity(src))}`;
+      const stableExisting = options.vault.getFiles().find((file) => file.parent && file.parent.path === folder && file.basename === stableStem && /^(jpe?g|png|gif|webp|svg|avif)$/i.test(file.extension));
+      if (stableExisting) {
+        image.dataset.obsidianPath = stableExisting.path;
+        continue;
+      }
       const response = await (0, import_obsidian.requestUrl)({ url: src, method: "GET" });
       const extension = inferExtension(src, response.headers["content-type"]);
-      const base = `${sanitizeFileName(options.noteTitle)}-${shortHash(src)}.${extension}`;
-      const path = (0, import_obsidian.normalizePath)(`${folder}/${base}`);
-      if (!options.vault.getAbstractFileByPath(path)) {
-        await options.vault.createBinary(path, response.arrayBuffer);
+      const data = response.arrayBuffer;
+      const contentHash = binaryHash(data);
+      const matchingExisting = await findExistingImageByContent(options.vault, folder, notePrefix, data, contentHash);
+      let path;
+      if (matchingExisting) {
+        path = matchingExisting.path;
+      } else {
+        const base = `${stableStem}.${extension}`;
+        path = (0, import_obsidian.normalizePath)(`${folder}/${base}`);
+        if (!options.vault.getAbstractFileByPath(path)) {
+          await options.vault.createBinary(path, data);
+        }
       }
       image.dataset.obsidianPath = path;
     } catch (error) {
       console.warn("Netdisk AI Notes Importer: image download failed", src, error);
     }
   }
+}
+function stableImageIdentity(value) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    const volatile = /^(?:authorization|auth|sign|signature|token|access_token|expires?|expiration|x-bce-date|x-bce-security-token|x-bce-signature|x-bce-credential)$/i;
+    Array.from(url.searchParams.keys()).forEach((key) => {
+      const value2 = url.searchParams.get(key) || "";
+      if (volatile.test(key) || /^(?:timestamp|time|ts|t)$/i.test(key) && /^\d{10,}$/.test(value2)) url.searchParams.delete(key);
+    });
+    url.searchParams.sort();
+    return url.toString();
+  } catch (e) {
+    return String(value || "").replace(/[?#].*$/, "");
+  }
+}
+function binaryHash(value) {
+  return node_crypto.createHash("sha256").update(new Uint8Array(value)).digest("hex");
+}
+async function findExistingImageByContent(vault, folder, notePrefix, data, expectedHash) {
+  const candidates = vault.getFiles().filter((file) => file.parent && file.parent.path === folder && file.basename.startsWith(`${notePrefix}-`) && file.stat.size === data.byteLength && /^(jpe?g|png|gif|webp|svg|avif)$/i.test(file.extension));
+  for (const file of candidates) {
+    try {
+      const existing = await vault.readBinary(file);
+      if (binaryHash(existing) === expectedHash) return file;
+    } catch (e) {
+    }
+  }
+  return null;
 }
 async function ensureFolder(vault, folder) {
   if (!folder) return;
@@ -1205,6 +1250,12 @@ async function extractOnlineSubtitles(webview) {
       .replace(/<[^>]+>/g, ' ')
       .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
       .replace(/\s+/g, ' ').trim();
+    const visible = el => {
+      if (!el) return false;
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 8 && rect.height > 8;
+    };
     const toSeconds = value => {
       if (typeof value === 'number') return Number.isFinite(value) ? value : NaN;
       const text = String(value == null ? '' : value).trim().replace(',', '.');
@@ -1233,11 +1284,32 @@ async function extractOnlineSubtitles(webview) {
       cues.sort((a, b) => a.start - b.start || a.end - b.end);
       if (cues.length) candidates.push({ source, cues });
     };
-    const transcriptTab = Array.from(document.querySelectorAll('button, [role="tab"], [role="button"], a, span'))
-      .filter(el => clean(el.textContent) === '\u6587\u7A3F')
-      .sort((a, b) => (a.getBoundingClientRect().width * a.getBoundingClientRect().height) - (b.getBoundingClientRect().width * b.getBoundingClientRect().height))[0];
-    if (transcriptTab && transcriptTab.getAttribute('aria-selected') !== 'true') {
-      try { transcriptTab.click(); await wait(700); } catch (_) {}
+    const transcriptTab = Array.from(new Set(Array.from(document.querySelectorAll('button, [role="tab"], [role="button"], a, span'))
+      .filter(el => visible(el) && clean(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title')) === '\u6587\u7A3F')
+      .map(el => el.closest('button, [role="tab"], [role="button"], a') || el)))
+      .sort((a, b) => {
+        const priority = el => el.getAttribute('role') === 'tab' ? 3 : el.tagName === 'BUTTON' ? 2 : el.getAttribute('role') === 'button' ? 1 : 0;
+        return priority(b) - priority(a);
+      })[0];
+    let transcriptPanelHint = null;
+    if (transcriptTab) {
+      const resolveTranscriptPanel = () => {
+        const controlledId = transcriptTab.getAttribute('aria-controls') || '';
+        if (controlledId) {
+          const controlled = document.getElementById(controlledId);
+          if (controlled) return controlled;
+        }
+        if (transcriptTab.id) return Array.from(document.querySelectorAll('[role="tabpanel"][aria-labelledby]')).find(panel => panel.getAttribute('aria-labelledby') === transcriptTab.id) || null;
+        return null;
+      };
+      const state = clean((transcriptTab.getAttribute('aria-selected') || '') + ' ' + (transcriptTab.getAttribute('aria-current') || '') + ' ' + (transcriptTab.getAttribute('data-state') || '') + ' ' + (typeof transcriptTab.className === 'string' ? transcriptTab.className : ''));
+      if (!/(^|[-_\s])(true|active|selected|current|open)([-_\s]|$)/i.test(state)) {
+        try { transcriptTab.click(); } catch (_) {}
+        await wait(1500);
+      } else {
+        await wait(350);
+      }
+      transcriptPanelHint = resolveTranscriptPanel();
     }
     const roots = [document];
     for (let rootIndex = 0; rootIndex < roots.length && roots.length < 40; rootIndex += 1) {
@@ -1358,12 +1430,14 @@ async function extractOnlineSubtitles(webview) {
     let documentPlainText = '';
     try {
       const panelPool = [
-        ...queryAll('[role="tabpanel"], [class*="transcript" i], [class*="manuscript" i], [class*="speech-text" i], [class*="document-content" i]'),
+        ...(transcriptPanelHint ? [transcriptPanelHint] : []),
+        ...queryAll('[class*="transcript" i], [class*="manuscript" i], [class*="speech-text" i], [class*="document-content" i]'),
         ...Array.from(document.querySelectorAll('div, section, article')).filter(el => {
           const rect = el.getBoundingClientRect();
           const style = getComputedStyle(el);
           const text = clean(el.innerText || el.textContent);
-          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width >= 180 && rect.width <= 720 && rect.height >= 140 && rect.left >= window.innerWidth * 0.35 && text.length >= 120;
+          const signature = clean((el.id || '') + ' ' + (typeof el.className === 'string' ? el.className : '') + ' ' + (el.getAttribute('aria-label') || ''));
+          return /transcript|manuscript|speech.?text|document.?content|\u6587\u7A3F/i.test(signature) && style.display !== 'none' && style.visibility !== 'hidden' && rect.width >= 180 && rect.width <= 720 && rect.height >= 140 && rect.left >= window.innerWidth * 0.35 && text.length >= 120;
         }).slice(0, 120)
       ];
       const uniquePanels = Array.from(new Set(panelPool));
@@ -2690,7 +2764,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
             noteStatus = "\u672A\u8BFB\u5230\u65B0\u7684 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u5DF2\u5B89\u5168\u4FDD\u7559\u539F\u7B14\u8BB0";
           }
         }
-        const result = await this.importOnlineSubtitlesForCurrentNote(file, videoUrl, notice, activeVideoWebview, true);
+        const result = await this.importOnlineSubtitlesForCurrentNote(file, videoUrl, notice, activeVideoWebview, false);
         if (selectedDifferentFolder) {
           file = await this.moveNoteToFolder(file, targetFolder);
           noteStatus += "\uFF0C\u5DF2\u79FB\u5230\u6240\u9009\u6587\u4EF6\u5939";
@@ -2785,7 +2859,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         ...findVideoWebviews(targetVideoUrl),
         ...getWebviews().filter((view) => isVideoUrl(safeWebviewUrl(view)) && (!wantedPath || getQueryPath(safeWebviewUrl(view)) === wantedPath))
       ].filter(Boolean)));
-      for (let attempt = 0; attempt < 4; attempt += 1) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
         for (const candidateWebview of videoWebviews) {
           try {
             const extracted = await extractOnlineSubtitles(candidateWebview);
@@ -2797,7 +2871,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
           }
         }
         const trustedCompleteSource = ["player-text-track", "network-timed-text", "network-json", "media-extended-transcript"].includes(best.source);
-        if (best.cues.length >= 5 || trustedCompleteSource && best.cues.length > 0 || String(best.plainText || "").length >= 80) break;
+        if (best.cues.length >= 5 || trustedCompleteSource && best.cues.length > 0) break;
         await delay(900 + attempt * 500);
       }
       const completeSource = ["player-text-track", "network-timed-text", "network-json", "media-extended-transcript"].includes(best.source);

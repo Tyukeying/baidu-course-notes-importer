@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.4
+
+- Keep waiting for timestamped subtitle resources during the first combined import instead of stopping when unrelated plain text appears.
+- Target the visible/clickable transcript tab and wait for its panel to load before scanning player and network resources.
+- Reuse AI-note images by a stable source identity and binary content hash so rotating Baidu URL signatures do not create duplicate attachments.
+- Treat missing subtitles as an explicit combined-import failure instead of silently requiring a second click.
+
 ## 0.5.3
 
 - Restrict video/FCB imports to the active Web Viewer instead of guessing a background tab.
