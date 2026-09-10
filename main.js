@@ -1477,10 +1477,20 @@ async function extractOnlineSubtitles(webview) {
       } catch (_) {}
     }
 
+    const sourcePriority = source => ({
+      'player-text-track': 50,
+      'network-timed-text': 40,
+      'network-json': 30,
+      'baidu-document-state': 20,
+      'page-transcript-dom': 15,
+      'page-state': 5
+    })[source] || 0;
     candidates.sort((a, b) => {
       const aEnd = a.cues.reduce((max, cue) => Math.max(max, cue.end || cue.start), 0);
       const bEnd = b.cues.reduce((max, cue) => Math.max(max, cue.end || cue.start), 0);
-      return b.cues.length - a.cues.length || bEnd - aEnd;
+      const aComplete = a.cues.length >= 5 ? 1 : 0;
+      const bComplete = b.cues.length >= 5 ? 1 : 0;
+      return bComplete - aComplete || sourcePriority(b.source) - sourcePriority(a.source) || b.cues.length - a.cues.length || bEnd - aEnd;
     });
     const best = candidates[0] || { source: 'none', cues: [] };
     return { source: best.source, cues: best.cues, plainText: documentPlainText, candidateCount: candidates.length, pageUrl: location.href, title: document.title };
@@ -1890,7 +1900,7 @@ var NetdiskAiNotesSettingTab = class extends import_obsidian2.PluginSettingTab {
       await this.plugin.saveSettings();
       this.display();
     }));
-    new import_obsidian2.Setting(containerEl).setName("\u5199\u5165\u540E\u9009\u62E9\u4FDD\u5B58\u6587\u4EF6\u5939").setDesc("\u5F00\u542F\u540E\uFF0C\u53EA\u8981\u672C\u6B21\u5DF2\u5199\u5165\u7B14\u8BB0\u6216\u5B57\u5E55\uFF0C\u5C31\u5F39\u51FA Vault \u6587\u4EF6\u5939\u9009\u62E9\u5668\u3002\u5B57\u5E55\u7A0D\u540E\u91CD\u8BD5\u65F6\u4F1A\u81EA\u52A8\u8865\u5230\u539F\u7B14\u8BB0\u3002").addToggle((toggle) => toggle.setValue(this.plugin.settings.chooseFolderOnImport).onChange(async (value) => {
+    new import_obsidian2.Setting(containerEl).setName("\u5199\u5165\u524D\u9009\u62E9\u4FDD\u5B58\u6587\u4EF6\u5939").setDesc("\u5F00\u542F\u540E\uFF0C\u5BFC\u5165\u524D\u5148\u9009\u62E9 Vault \u6587\u4EF6\u5939\uFF1B\u53D6\u6D88\u9009\u62E9\u4F1A\u53D6\u6D88\u672C\u6B21\u5BFC\u5165\u3002AI \u7B14\u8BB0\u56FE\u7247\u4F1A\u5199\u5165\u6240\u9009\u76EE\u5F55\u7684\u9644\u4EF6\u5B50\u76EE\u5F55\u3002").addToggle((toggle) => toggle.setValue(this.plugin.settings.chooseFolderOnImport).onChange(async (value) => {
       this.plugin.settings.chooseFolderOnImport = value;
       await this.plugin.saveSettings();
     }));
@@ -1959,25 +1969,37 @@ function findFcbWebview(url) {
 }
 function findActiveFcbWebview(app) {
   try {
-    const leaf = typeof app.workspace.getMostRecentLeaf === "function" ? app.workspace.getMostRecentLeaf() : app.workspace.activeLeaf;
-    const container = leaf == null ? void 0 : leaf.view.containerEl;
-    const candidates = container ? Array.from(container.querySelectorAll("webview")) : [];
-    const active = candidates.find((view) => isFcbUrl(safeWebviewUrl(view)));
-    if (active) return active;
+    const leaves = Array.from(new Set([
+      app.workspace.activeLeaf,
+      typeof app.workspace.getMostRecentLeaf === "function" ? app.workspace.getMostRecentLeaf() : null
+    ].filter(Boolean)));
+    for (const leaf of leaves) {
+      const container = leaf == null ? void 0 : leaf.view.containerEl;
+      const candidates = container ? Array.from(container.querySelectorAll("webview")) : [];
+      const active = candidates.find((view) => isFcbUrl(safeWebviewUrl(view)));
+      if (active) return active;
+    }
   } catch (e) {
   }
-  return findFcbWebview();
+  return void 0;
 }
 function findActiveVideoWebview(app, videoUrl) {
   try {
-    const leaf = typeof app.workspace.getMostRecentLeaf === "function" ? app.workspace.getMostRecentLeaf() : app.workspace.activeLeaf;
-    const container = leaf == null ? void 0 : leaf.view.containerEl;
-    const candidates = container ? Array.from(container.querySelectorAll("webview")) : [];
-    const active = candidates.find((view) => isVideoUrl(safeWebviewUrl(view)) && (!videoUrl || samePage(safeWebviewUrl(view), videoUrl)));
-    if (active) return active;
+    const leaves = Array.from(new Set([
+      app.workspace.activeLeaf,
+      typeof app.workspace.getMostRecentLeaf === "function" ? app.workspace.getMostRecentLeaf() : null
+    ].filter(Boolean)));
+    for (const leaf of leaves) {
+      const container = leaf == null ? void 0 : leaf.view.containerEl;
+      const candidates = container ? Array.from(container.querySelectorAll("webview")) : [];
+      const active = candidates.find((view) => isVideoUrl(safeWebviewUrl(view)) && (!videoUrl || samePage(safeWebviewUrl(view), videoUrl)));
+      if (active) return active;
+    }
   } catch (e) {
   }
-  return findVideoWebview(videoUrl);
+  // With no requested URL, never guess from a hidden/background Web Viewer.
+  // Commands launched from a video page must operate on the actually active leaf.
+  return videoUrl ? findVideoWebview(videoUrl) : void 0;
 }
 function findVideoWebview(videoUrl) {
   return findVideoWebviews(videoUrl)[0];
@@ -2134,16 +2156,32 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
     const normalize = value => String(value || '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
     const noteLabel = /AI\s*笔记|智能笔记|视频笔记|课程笔记|内容总结|知识总结/i;
 
-    const noteTabLabel = /^(AI\s*笔记|智能笔记|视频笔记|课程笔记|内容总结|知识总结)(?:\s*[\uff08(]\d+[\uff09)])?$/i;
+    const noteTabLabel = /^(AI\s*笔记|智能笔记|视频笔记|课程笔记|内容总结|知识总结)(?:\s*[\uff08(]\d+[\uff09)])?(?:\s*(?:已生成|生成中|新|NEW))?$/i;
+    const isNoteTabLabel = value => {
+      const text = normalize(value);
+      return text.length <= 32 && (noteTabLabel.test(text) || noteLabel.test(text) && !/字幕|文稿|课件|选集/.test(text));
+    };
     const noteTab = Array.from(document.querySelectorAll('button, [role="tab"], [role="button"], span, div'))
       .filter(visible)
-      .find(el => noteTabLabel.test(normalize(el.textContent)));
+      .find(el => isNoteTabLabel(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title')));
+    let notePanel = null;
     if (noteTab) {
       const control = noteTab.closest('button, [role="tab"], [role="button"], a') || noteTab;
-      const state = normalize((control.getAttribute('aria-selected') || '') + ' ' + (control.getAttribute('aria-current') || '') + ' ' + (typeof control.className === 'string' ? control.className : ''));
-      if (!/(^|\s)(true|active|selected|current)(\s|$)/i.test(state)) {
+      const resolveNotePanel = () => {
+        const controlledId = control.getAttribute('aria-controls') || '';
+        if (controlledId) {
+          const controlled = document.getElementById(controlledId);
+          if (controlled) return controlled;
+        }
+        if (control.id) return Array.from(document.querySelectorAll('[role="tabpanel"][aria-labelledby]')).find(panel => panel.getAttribute('aria-labelledby') === control.id) || null;
+        return null;
+      };
+      notePanel = resolveNotePanel();
+      const state = normalize((control.getAttribute('aria-selected') || '') + ' ' + (control.getAttribute('aria-current') || '') + ' ' + (control.getAttribute('data-state') || '') + ' ' + (typeof control.className === 'string' ? control.className : ''));
+      if (!/(^|[-_\s])(true|active|selected|current|open)([-_\s]|$)/i.test(state)) {
         try { control.click(); } catch (_) {}
         await wait(900);
+        notePanel = resolveNotePanel();
       }
     }
 
@@ -2167,9 +2205,10 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
       const score = Math.min(cleanText.length, 6000) + bonus + (noteLabel.test(signature + ' ' + cleanText.slice(0, 160)) ? 800 : 0);
       candidates.push({ source, html: clone.innerHTML, text: cleanText, score });
     };
+    if (notePanel) add(notePanel, 'ai-note-tab-panel', 1800);
     document.querySelectorAll('.ql-editor, [data-testid*="ai-note-content" i], [class*="ai-note-content" i], [class*="ainote-content" i], [class*="smart-note-content" i]').forEach(el => add(el, el.matches('.ql-editor') ? 'fcb-editor' : 'verified-ai-note-content', el.matches('.ql-editor') ? 1600 : 800));
     document.querySelectorAll('[class*="ai-note" i], [class*="ainote" i], [class*="smart-note" i], [class*="video-note" i], [id*="ai-note" i], [data-testid*="note" i]').forEach(el => add(el, 'video-page-note', 420));
-    for (const heading of Array.from(document.querySelectorAll('h1, h2, h3, h4, [role="tab"], button, span, div')).filter(el => visible(el) && noteTabLabel.test(normalize(el.textContent))).slice(0, 20)) {
+    for (const heading of Array.from(document.querySelectorAll('h1, h2, h3, h4, [role="tab"], button, span, div')).filter(el => visible(el) && isNoteTabLabel(el.textContent)).slice(0, 20)) {
       let parent = heading.parentElement;
       for (let depth = 0; parent && depth < 4; depth += 1, parent = parent.parentElement) add(parent, 'video-page-note-panel', 260 - depth * 40);
     }
@@ -2367,7 +2406,7 @@ async function waitAndSeek(videoUrl, seconds) {
 }
 async function openInWebViewer(app, url, position) {
   var _a;
-  const leaf = position === "right" ? (_a = app.workspace.getRightLeaf(false)) != null ? _a : app.workspace.getLeaf("split", "vertical") : app.workspace.getLeaf(false);
+  const leaf = position === "right" ? (_a = app.workspace.getRightLeaf(false)) != null ? _a : app.workspace.getLeaf("split", "vertical") : position === "tab" ? app.workspace.getLeaf("tab") : app.workspace.getLeaf(false);
   try {
     await leaf.setViewState({ type: "webviewer", active: true, state: { url } });
     app.workspace.revealLeaf(leaf);
@@ -2547,7 +2586,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
     }
     const notice = new import_obsidian4.Notice("\u6B63\u5728\u5BFC\u5165\u767E\u5EA6 FCB AI \u7B14\u8BB0\u548C\u5B57\u5E55\u2026", 0);
     try {
-      const result = await this.importWebview(webview, notice, true);
+      const result = await this.importWebview(webview, notice, this.settings.openVideoAfterImport);
       let subtitleResult = { source: "unavailable", cues: [] };
       if (result.videoUrl) {
         notice.setMessage("\u767E\u5EA6 AI \u7B14\u8BB0\u5DF2\u5BFC\u5165\uFF0C\u6B63\u5728\u8BFB\u53D6\u5BF9\u5E94\u89C6\u9891\u5B57\u5E55\u2026");
@@ -2557,6 +2596,10 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       new import_obsidian4.Notice(subtitleResult.cues.length ? `FCB AI \u7B14\u8BB0\u548C ${subtitleResult.cues.length} \u6761\u5B57\u5E55\u5BFC\u5165\u5B8C\u6210` : subtitleResult.plainText ? "FCB AI \u7B14\u8BB0\u548C\u767E\u5EA6\u7F51\u9875\u6587\u7A3F\u5BFC\u5165\u5B8C\u6210" : result.videoUrl ? "FCB AI \u7B14\u8BB0\u5DF2\u5BFC\u5165\uFF1B\u672C\u6B21\u672A\u8BFB\u5230\u5B8C\u6574\u5B57\u5E55" : "FCB AI \u7B14\u8BB0\u5DF2\u5BFC\u5165\uFF1B\u6682\u672A\u8BC6\u522B\u5BF9\u5E94\u89C6\u9891", 8e3);
     } catch (error) {
       notice.hide();
+      if (messageOf(error) === "\u5DF2\u53D6\u6D88\u5BFC\u5165") {
+        new import_obsidian4.Notice("\u5DF2\u53D6\u6D88\u5BFC\u5165");
+        return;
+      }
       console.error("Netdisk AI Notes Importer import failed", error);
       new import_obsidian4.Notice(`\u5BFC\u5165\u5931\u8D25\uFF1A${messageOf(error)}`, 8e3);
     }
@@ -2598,17 +2641,23 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         }
         const matches = await this.findManagedFilesByVideoUrl(videoUrl);
         let file = matches.length ? await this.consolidateManagedVideoFiles(matches, videoUrl) : null;
+        if (!file && !snapshot.html) {
+          throw new Error("\u672A\u8BFB\u53D6\u5230 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u5DF2\u505C\u6B62\u5BFC\u5165\uFF0C\u4E0D\u4F1A\u521B\u5EFA\u7A7A\u7B14\u8BB0\u3002\u8BF7\u5148\u5728\u89C6\u9891\u9875\u6253\u5F00\u201CAI \u7B14\u8BB0\u201D\u9762\u677F\u540E\u91CD\u8BD5\u3002");
+        }
         let targetFolder = file && file.parent ? file.parent.path : this.settings.notesFolder;
         let selectedDifferentFolder = false;
         if (this.settings.chooseFolderOnImport) {
           notice.setMessage("\u8BF7\u9009\u62E9\u7B14\u8BB0\u4FDD\u5B58\u6587\u4EF6\u5939\uFF1BAI \u7B14\u8BB0\u56FE\u7247\u5C06\u4FDD\u5B58\u5230\u5176\u9644\u4EF6\u5B50\u76EE\u5F55\u2026");
           const selectedFolder = await this.chooseImportFolder();
-          if (selectedFolder !== null) {
-            selectedDifferentFolder = Boolean(file) && selectedFolder !== targetFolder;
-            targetFolder = selectedFolder;
-            this.settings.notesFolder = selectedFolder;
-            await this.saveSettings();
+          if (selectedFolder === null) {
+            notice.hide();
+            new import_obsidian4.Notice("\u5DF2\u53D6\u6D88\u5BFC\u5165");
+            return;
           }
+          selectedDifferentFolder = Boolean(file) && selectedFolder !== targetFolder;
+          targetFolder = selectedFolder;
+          this.settings.notesFolder = selectedFolder;
+          await this.saveSettings();
         }
         const imageFolder = attachmentFolderForNoteFolder(targetFolder, this.settings.attachmentsSubfolder);
         let noteStatus = "\u5DF2\u4FDD\u7559\u539F\u7B14\u8BB0";
@@ -2637,9 +2686,8 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
             });
             await this.mergeVideoPageNoteIntoFile(file, markdown, snapshot);
             noteStatus = ["linked-fcb-note", "fcb-editor"].includes(snapshot.noteSource) ? "\u5DF2\u66F4\u65B0\u767E\u5EA6 FCB AI \u7B14\u8BB0\u6B63\u6587" : "\u5DF2\u66F4\u65B0\u7ECF\u9A8C\u8BC1\u7684\u7F51\u9875 AI \u7B14\u8BB0\u6B63\u6587";
-          } else if (!snapshot.html && (fm == null ? void 0 : fm.source) === "baidu-video-note" && ["video-page-note-panel", "video-page-note"].includes(fm.web_note_source)) {
-            await this.mergeVideoPageNoteIntoFile(file, "## \u5B66\u4E60\u7B14\u8BB0\n\n> \u672A\u8BFB\u5230\u53EF\u786E\u8BA4\u7684\u767E\u5EA6 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u5DF2\u79FB\u9664\u4E0A\u6B21\u8BEF\u63D0\u53D6\u7684\u7F51\u9875\u4FA7\u680F\u5185\u5BB9\u3002", { ...snapshot, url: videoUrl, noteSource: "verified-note-unavailable" });
-            noteStatus = "\u5DF2\u79FB\u9664\u8BEF\u63D0\u53D6\u7684\u7F51\u9875\u4FA7\u680F";
+          } else if (!snapshot.html) {
+            noteStatus = "\u672A\u8BFB\u5230\u65B0\u7684 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u5DF2\u5B89\u5168\u4FDD\u7559\u539F\u7B14\u8BB0";
           }
         }
         const result = await this.importOnlineSubtitlesForCurrentNote(file, videoUrl, notice, activeVideoWebview, true);
@@ -2664,7 +2712,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       }
       const fcbWebview = file ? null : findActiveFcbWebview(this.app);
       if (fcbWebview) {
-        const result = await this.importWebview(fcbWebview, notice, true);
+        const result = await this.importWebview(fcbWebview, notice, this.settings.openVideoAfterImport);
         file = result.file;
         videoUrl = result.videoUrl;
       } else if (file) {
@@ -2681,6 +2729,10 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       new import_obsidian4.Notice(`\u7F51\u9875\u5BFC\u5165\u5B8C\u6210\uFF1A${result.cues.length} \u6761\u5B57\u5E55\uFF08${subtitleSourceLabel(result.source)}\uFF09`, 7e3);
     } catch (error) {
       notice.hide();
+      if (messageOf(error) === "\u5DF2\u53D6\u6D88\u5BFC\u5165") {
+        new import_obsidian4.Notice("\u5DF2\u53D6\u6D88\u5BFC\u5165");
+        return;
+      }
       console.error("Baidu Course Notes Importer online note/subtitle import failed", error);
       new import_obsidian4.Notice(`\u7F51\u9875\u5BFC\u5165\u5931\u8D25\uFF1A${messageOf(error)}`, 1e4);
     }
@@ -2688,6 +2740,12 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
   async importOnlineSubtitlesForCurrentNote(file, videoUrl, existingNotice, preferredWebview, allowMissing = false) {
     const ownNotice = existingNotice ? null : new import_obsidian4.Notice("\u6B63\u5728\u4ECE Web Viewer \u8BFB\u53D6\u5B8C\u6574\u5B57\u5E55\u2026", 0);
     const notice = existingNotice || ownNotice;
+    let temporaryVideoWebview = null;
+    const closeTemporaryVideo = () => {
+      if (!temporaryVideoWebview || this.settings.openVideoAfterImport) return;
+      this.closeWebviewLeaves([temporaryVideoWebview]);
+      temporaryVideoWebview = null;
+    };
     try {
       let targetFile = file || this.getActiveManagedFile();
       let targetVideoUrl = videoUrl || "";
@@ -2702,11 +2760,25 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       if (!isVideoUrl(targetVideoUrl)) throw new Error("\u5F53\u524D\u7B14\u8BB0\u8FD8\u6CA1\u6709\u6709\u6548\u7684\u767E\u5EA6\u5927\u89C6\u9891\u5730\u5740\u3002");
       if (!videoWebview) {
         notice.setMessage("\u6B63\u5728 Media Extended / Web Viewer \u4E2D\u6253\u5F00\u5927\u89C6\u9891\u2026");
-        await this.openVideo(targetVideoUrl);
+        if (this.settings.openVideoAfterImport) {
+          await this.openVideo(targetVideoUrl);
+        } else {
+          await openInWebViewer(this.app, targetVideoUrl, "tab");
+        }
         videoWebview = await waitForWebview((view) => isVideoUrl(safeWebviewUrl(view)) && samePage(safeWebviewUrl(view), targetVideoUrl));
+        temporaryVideoWebview = videoWebview;
       }
       notice.setMessage("\u6B63\u5728\u8BFB\u53D6\u64AD\u653E\u5668\u8F68\u9053\u3001Media Extended Transcript \u548C\u7F51\u9875\u5B57\u5E55\u8D44\u6E90\u2026");
       let best = { source: "none", cues: [], plainText: "" };
+      const sourcePriority = (source) => ({
+        "player-text-track": 50,
+        "network-timed-text": 40,
+        "network-json": 30,
+        "media-extended-transcript": 25,
+        "baidu-document-state": 20,
+        "page-transcript-dom": 15,
+        "page-state": 5
+      })[source] || 0;
       const wantedPath = getQueryPath(targetVideoUrl);
       const videoWebviews = Array.from(new Set([
         videoWebview,
@@ -2717,7 +2789,9 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         for (const candidateWebview of videoWebviews) {
           try {
             const extracted = await extractOnlineSubtitles(candidateWebview);
-            if (extracted.cues.length > best.cues.length || extracted.cues.length === best.cues.length && String(extracted.plainText || "").length > String(best.plainText || "").length) best = extracted;
+            const extractedComplete = extracted.cues.length >= 5 ? 1 : 0;
+            const bestComplete = best.cues.length >= 5 ? 1 : 0;
+            if (extractedComplete > bestComplete || extractedComplete === bestComplete && sourcePriority(extracted.source) > sourcePriority(best.source) || extractedComplete === bestComplete && sourcePriority(extracted.source) === sourcePriority(best.source) && (extracted.cues.length > best.cues.length || extracted.cues.length === best.cues.length && String(extracted.plainText || "").length > String(best.plainText || "").length)) best = extracted;
           } catch (extractError) {
             console.debug("Baidu Course Notes Importer: subtitle extraction attempt failed", safeWebviewUrl(candidateWebview), extractError);
           }
@@ -2729,6 +2803,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       const completeSource = ["player-text-track", "network-timed-text", "network-json", "media-extended-transcript"].includes(best.source);
       if (!best.plainText && (best.cues.length === 0 || !completeSource && best.cues.length < 5)) {
         if (allowMissing) {
+          closeTemporaryVideo();
           await this.openFileInNewTab(targetFile);
           return { source: "unavailable", cues: [], plainText: "" };
         }
@@ -2736,6 +2811,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       }
       best.cues = normalizeOnlineCues(best.cues);
       await this.mergeOnlineSubtitlesIntoFile(targetFile, targetVideoUrl, best);
+      closeTemporaryVideo();
       await this.openFileInNewTab(targetFile);
       if (ownNotice) {
         ownNotice.hide();
@@ -2743,6 +2819,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       }
       return best;
     } catch (error) {
+      closeTemporaryVideo();
       if (ownNotice) {
         ownNotice.hide();
         console.error("Baidu Course Notes Importer online subtitle import failed", error);
@@ -3198,7 +3275,7 @@ ${END_MARKER}`;
     if (!videoUrl) return null;
     for (const file of this.app.vault.getMarkdownFiles()) {
       const fm = (_a = this.app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter;
-      if (!fm || !["baidu-ai-note", "baidu-netdisk-course-note"].includes(fm.source)) continue;
+      if (!fm || !["baidu-ai-note", "baidu-video-note", "baidu-netdisk-course-note"].includes(fm.source)) continue;
       const stored = typeof fm.video_url === "string" ? fm.video_url : "";
       const storedPath = typeof fm.video_path === "string" ? fm.video_path : "";
       const wantedPath = getQueryPath(videoUrl);
@@ -3254,13 +3331,8 @@ ${END_MARKER}`;
       fm.video_url = videoUrl;
       fm.video_path = getQueryPath(videoUrl);
     });
-    for (const duplicate of matches.slice(1)) {
-      if (duplicate.file.path === canonical.file.path) continue;
-      try {
-        await this.app.vault.trash(duplicate.file, true);
-      } catch (error) {
-        console.warn("Baidu Course Notes Importer: could not move duplicate note to trash", duplicate.file.path, error);
-      }
+    if (matches.length > 1) {
+      console.info("Baidu Course Notes Importer: kept duplicate notes; updated canonical file only", canonical.file.path, matches.slice(1).map((item) => item.file.path));
     }
     return canonical.file;
   }
@@ -3358,6 +3430,14 @@ ${END_MARKER}
     await this.openFileInNewTab(file);
   }
   async openFileInNewTab(file) {
+    let existingLeaf = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (!existingLeaf && leaf.view && leaf.view.file && leaf.view.file.path === file.path) existingLeaf = leaf;
+    });
+    if (existingLeaf) {
+      this.app.workspace.revealLeaf(existingLeaf);
+      return existingLeaf;
+    }
     const leaf = this.app.workspace.getLeaf("tab");
     await leaf.openFile(file);
     this.app.workspace.revealLeaf(leaf);
