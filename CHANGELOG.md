@@ -6,6 +6,12 @@
 - Stop guessing that a lone open Baidu video belongs to the current FCB document when no exact evidence exists.
 - Add a command to copy privacy-safe diagnostics for the most recent import, including stage, source, cue counts, candidate counts and retry results.
 - Redact full URLs, authentication tokens, cookies and Baidu session identifiers from copied diagnostics.
+- Index the selected attachment folder once per import and reject local/private-network image sources while preserving normal Baidu and BCE images.
+- Collect and validate subtitles before committing FCB imports; newly created notes contain AI notes and subtitles in the first Vault write.
+- Preserve duplicate notes without combining managed sections from different files, and report duplicate counts in diagnostics.
+- Limit subtitle resource probing to explicit or recent fallback requests on Baidu-related domains.
+- Rename the user-facing AI-note action from “sync” to “refresh” while retaining the existing command ID and settings compatibility.
+- Show progress for each of the five bounded subtitle-detection attempts.
 
 ## 0.5.5
 
