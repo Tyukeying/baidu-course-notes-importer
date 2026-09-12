@@ -603,6 +603,28 @@ test("FCB navigation only associates a video with its originating webview", () =
   assert.deepEqual(associations, [[fcbUrl, videoUrl]]);
 });
 
+test("WebView tracking forgets FCB context after navigating to an unrelated page", () => {
+  const fcbUrl = "https://pan.baidu.com/fcb/edit?fsid=123";
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  let currentUrl = fcbUrl;
+  const handlers = new Map();
+  const webview = {
+    getURL: () => currentUrl,
+    addEventListener: (name, callback) => handlers.set(name, callback),
+    removeEventListener() {}
+  };
+  const associations = [];
+  const instance = Object.create(plugin.default.prototype);
+  instance.observedWebviews = new WeakSet();
+  instance.register = () => {};
+  instance.rememberVideoUrl = (source, target) => associations.push([source, target]);
+  instance.attachWebview(webview);
+  currentUrl = "https://example.com/";
+  handlers.get("did-navigate")({ url: currentUrl });
+  handlers.get("new-window")({ url: videoUrl });
+  assert.deepEqual(associations, []);
+});
+
 test("FCB video mappings stay bounded during long-running sessions", () => {
   const instance = Object.create(plugin.default.prototype);
   instance.settings = { videoByFcbUrl: {} };

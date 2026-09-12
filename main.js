@@ -3638,13 +3638,19 @@ ${END_MARKER}`;
     const rememberContext = () => {
       const url = safeWebviewUrl(webview);
       if (isFcbUrl(url)) fcbContextUrl = url;
+      else fcbContextUrl = "";
     };
     const captureEventUrl = (event) => {
       var _a;
       const url = (_a = event.url) != null ? _a : "";
       const currentUrl = safeWebviewUrl(webview);
       if (isFcbUrl(currentUrl)) fcbContextUrl = currentUrl;
-      if (isVideoUrl(url) && fcbContextUrl) this.rememberVideoUrl(fcbContextUrl, url);
+      if (isVideoUrl(url) && fcbContextUrl) {
+        this.rememberVideoUrl(fcbContextUrl, url);
+        fcbContextUrl = "";
+      } else if (url && !isFcbUrl(url) && !isVideoUrl(url) && !isFcbUrl(currentUrl)) {
+        fcbContextUrl = "";
+      }
       window.setTimeout(rememberContext, 0);
     };
     ["did-navigate", "did-navigate-in-page", "new-window", "will-navigate"].forEach((name) => {
