@@ -2025,7 +2025,7 @@ var NetdiskAiNotesSettingTab = class extends import_obsidian2.PluginSettingTab {
       this.plugin.settings.videoOpenPosition = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian2.Setting(containerEl).setName("\u540C\u6B65\u65B9\u5F0F").setDesc("\u589E\u91CF\u540C\u6B65\u4F1A\u4FDD\u7559\u5DF2\u6709\u7AE0\u8282\u548C\u624B\u5DE5\u4FEE\u6539\uFF1B\u8986\u76D6\u540C\u6B65\u4F1A\u66FF\u6362\u63D2\u4EF6\u7BA1\u7406\u533A\u57DF\u3002").addDropdown((dropdown) => dropdown.addOption("incremental", "\u589E\u91CF\u540C\u6B65\uFF08\u63A8\u8350\uFF09").addOption("replace", "\u8986\u76D6\u540C\u6B65").setValue(this.plugin.settings.syncMode).onChange(async (value) => {
+    new import_obsidian2.Setting(containerEl).setName("\u5237\u65B0\u65B9\u5F0F").setDesc("\u589E\u91CF\u5237\u65B0\u4F1A\u4FDD\u7559\u5DF2\u6709\u7AE0\u8282\u548C\u624B\u5DE5\u4FEE\u6539\uFF1B\u8986\u76D6\u5237\u65B0\u4F1A\u66FF\u6362\u63D2\u4EF6\u7BA1\u7406\u533A\u57DF\u3002").addDropdown((dropdown) => dropdown.addOption("incremental", "\u589E\u91CF\u5237\u65B0\uFF08\u63A8\u8350\uFF09").addOption("replace", "\u8986\u76D6\u5237\u65B0").setValue(this.plugin.settings.syncMode).onChange(async (value) => {
       this.plugin.settings.syncMode = value;
       await this.plugin.saveSettings();
     }));
@@ -2670,8 +2670,8 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
     });
     this.addCommand({
       id: "sync-current-baidu-ai-note",
-      name: "\u540C\u6B65\u5F53\u524D\u767E\u5EA6 AI \u7B14\u8BB0",
-      callback: () => void this.syncCurrentNote()
+      name: "\u5237\u65B0\u5F53\u524D\u767E\u5EA6 AI \u7B14\u8BB0\u5185\u5BB9",
+      callback: () => void this.refreshCurrentNote()
     });
     this.addCommand({
       id: "import-online-subtitles-for-current-note",
@@ -3387,7 +3387,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       throw error;
     }
   }
-  async syncCurrentNote() {
+  async refreshCurrentNote() {
     const file = this.getActiveManagedFile();
     const frontmatter = this.getActiveFrontmatter();
     const fcbUrl = typeof (frontmatter == null ? void 0 : frontmatter.fcb_url) === "string" ? frontmatter.fcb_url : "";
@@ -3395,7 +3395,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       new import_obsidian4.Notice("\u5F53\u524D\u6587\u4EF6\u4E0D\u662F\u7531 Netdisk AI Notes Importer \u7BA1\u7406\u7684\u7B14\u8BB0");
       return;
     }
-    const notice = new import_obsidian4.Notice("\u6B63\u5728\u540C\u6B65\u767E\u5EA6 AI \u7B14\u8BB0\u2026", 0);
+    const notice = new import_obsidian4.Notice("\u6B63\u5728\u5237\u65B0\u767E\u5EA6 AI \u7B14\u8BB0\u5185\u5BB9\u2026", 0);
     let temporaryVideoViews = [];
     try {
       let webview = findFcbWebview(fcbUrl);
@@ -3422,7 +3422,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       });
       const oldContent = await this.app.vault.read(file);
       if (!oldContent.includes(START_MARKER) || !oldContent.includes(END_MARKER)) {
-        throw new Error("\u627E\u4E0D\u5230\u63D2\u4EF6\u7BA1\u7406\u533A\u57DF\u6807\u8BB0\uFF0C\u5DF2\u505C\u6B62\u540C\u6B65\u4EE5\u4FDD\u62A4\u7528\u6237\u5185\u5BB9");
+        throw new Error("\u627E\u4E0D\u5230\u63D2\u4EF6\u7BA1\u7406\u533A\u57DF\u6807\u8BB0\uFF0C\u5DF2\u505C\u6B62\u5237\u65B0\u4EE5\u4FDD\u62A4\u7528\u6237\u5185\u5BB9");
       }
       let synchronizedMarkdown = markdown;
       let addedSections = 0;
@@ -3451,14 +3451,14 @@ ${END_MARKER}`;
       if (!this.settings.openVideoAfterImport) this.closeWebviewLeaves(temporaryVideoViews);
       notice.hide();
       if (this.settings.syncMode === "incremental") {
-        new import_obsidian4.Notice(`\u589E\u91CF\u540C\u6B65\u5B8C\u6210\uFF1A\u65B0\u589E ${addedSections} \u4E2A\u7AE0\u8282\u5757\uFF1B\u5DF2\u6709\u5185\u5BB9\u53CA\u4FEE\u6539\u5DF2\u4FDD\u7559`);
+        new import_obsidian4.Notice(`\u589E\u91CF\u5237\u65B0\u5B8C\u6210\uFF1A\u65B0\u589E ${addedSections} \u4E2A\u7AE0\u8282\u5757\uFF1B\u5DF2\u6709\u5185\u5BB9\u53CA\u4FEE\u6539\u5DF2\u4FDD\u7559`);
       } else {
-        new import_obsidian4.Notice("\u8986\u76D6\u540C\u6B65\u5B8C\u6210\uFF1B\u7BA1\u7406\u533A\u57DF\u5916\u7684\u7528\u6237\u5185\u5BB9\u5DF2\u4FDD\u7559");
+        new import_obsidian4.Notice("\u8986\u76D6\u5237\u65B0\u5B8C\u6210\uFF1B\u7BA1\u7406\u533A\u57DF\u5916\u7684\u7528\u6237\u5185\u5BB9\u5DF2\u4FDD\u7559");
       }
     } catch (error) {
       notice.hide();
-      console.error("Netdisk AI Notes Importer sync failed", error);
-      new import_obsidian4.Notice(`\u540C\u6B65\u5931\u8D25\uFF1A${messageOf(error)}`, 8e3);
+      console.error("Baidu Course Notes Importer refresh failed", error);
+      new import_obsidian4.Notice(`\u5237\u65B0\u5931\u8D25\uFF1A${messageOf(error)}`, 8e3);
     }
   }
   async seekFromNote(sourcePath, seconds) {
@@ -3467,7 +3467,7 @@ ${END_MARKER}`;
     const frontmatter = file instanceof import_obsidian4.TFile ? (_a = this.app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter : void 0;
     const videoUrl = typeof (frontmatter == null ? void 0 : frontmatter.video_url) === "string" ? frontmatter.video_url : "";
     if (!videoUrl || !isVideoUrl(videoUrl)) {
-      new import_obsidian4.Notice("\u8FD9\u7BC7\u7B14\u8BB0\u8FD8\u6CA1\u6709\u53EF\u7528\u7684\u89C6\u9891\u5730\u5740\u3002\u8BF7\u91CD\u65B0\u5BFC\u5165\u6216\u540C\u6B65\uFF0C\u63D2\u4EF6\u4F1A\u5C1D\u8BD5\u81EA\u52A8\u83B7\u53D6\u3002");
+      new import_obsidian4.Notice("\u8FD9\u7BC7\u7B14\u8BB0\u8FD8\u6CA1\u6709\u53EF\u7528\u7684\u89C6\u9891\u5730\u5740\u3002\u8BF7\u91CD\u65B0\u5BFC\u5165\u6216\u5237\u65B0\uFF0C\u63D2\u4EF6\u4F1A\u5C1D\u8BD5\u81EA\u52A8\u83B7\u53D6\u3002");
       return;
     }
     try {

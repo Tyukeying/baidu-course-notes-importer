@@ -118,6 +118,9 @@ test("plugin onload registers its Obsidian integrations without throwing", async
   assert.equal(instance.__ribbons.length, 3);
   assert.equal(instance.__commands.length, 8);
   assert.ok(instance.__commands.some((command) => command.id === "copy-last-baidu-import-diagnostics"));
+  const refreshCommand = instance.__commands.find((command) => command.id === "sync-current-baidu-ai-note");
+  assert.match(refreshCommand.name, /刷新/);
+  assert.doesNotMatch(refreshCommand.name, /同步/);
   assert.ok(instance.__registrations.length >= 1);
 });
 
