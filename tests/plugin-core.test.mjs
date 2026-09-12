@@ -46,6 +46,7 @@ globalThis.MutationObserver = class {
   observe() {}
   disconnect() {}
 };
+globalThis.window = { setTimeout: (callback) => callback() };
 
 function obsidianStub() {
   return new Proxy({
@@ -295,6 +296,41 @@ test("successful video import commits subtitles once and opens the note after co
   };
   await instance.importCurrentNoteAndSubtitles();
   assert.deepEqual(order, ["collect", "find", "consolidate", "merge", "open"]);
+});
+
+test("FCB resolution never guesses from an unrelated singleton video tab", () => {
+  const fcbUrl = "https://pan.baidu.com/fcb/edit?fsid=123";
+  const unrelatedVideo = {
+    getURL: () => "https://pan.baidu.com/pfile/video?path=%2Fother%2Funrelated.mp4"
+  };
+  const originalQuerySelectorAll = document.querySelectorAll;
+  document.querySelectorAll = () => [unrelatedVideo];
+  const instance = Object.create(plugin.default.prototype);
+  instance.settings = { videoByFcbUrl: {} };
+  try {
+    assert.equal(instance.resolveVideoUrl(fcbUrl, []), "");
+  } finally {
+    document.querySelectorAll = originalQuerySelectorAll;
+  }
+});
+
+test("FCB navigation only associates a video with its originating webview", () => {
+  const fcbUrl = "https://pan.baidu.com/fcb/edit?fsid=123";
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const handlers = new Map();
+  const webview = {
+    getURL: () => fcbUrl,
+    addEventListener: (name, callback) => handlers.set(name, callback),
+    removeEventListener() {}
+  };
+  const associations = [];
+  const instance = Object.create(plugin.default.prototype);
+  instance.observedWebviews = new WeakSet();
+  instance.register = () => {};
+  instance.rememberVideoUrl = (source, target) => associations.push([source, target]);
+  instance.attachWebview(webview);
+  handlers.get("new-window")({ url: videoUrl });
+  assert.deepEqual(associations, [[fcbUrl, videoUrl]]);
 });
 
 let failures = 0;

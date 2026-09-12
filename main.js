@@ -2516,7 +2516,6 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
     this.observedWebviews = /* @__PURE__ */ new WeakSet();
-    this.mostRecentFcbUrl = "";
   }
   async onload() {
     await this.loadSettings();
@@ -3140,7 +3139,6 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       if (keepVideoAfterImport && existingVideoUrl) await this.openVideo(existingVideoUrl);
       return { file: existingAfterCapture, videoUrl: existingVideoUrl, skipped: true };
     }
-    this.mostRecentFcbUrl = snapshot.url;
     let videoUrl = this.resolveVideoUrl(snapshot.url, snapshot.videoUrlCandidates);
     if (!videoUrl) {
       notice.setMessage("\u6B63\u5728\u81EA\u52A8\u83B7\u53D6\u767E\u5EA6\u5927\u89C6\u9891\u5730\u5740\u2026");
@@ -3300,7 +3298,7 @@ ${END_MARKER}`;
     if (remembered && isVideoUrl(remembered)) return remembered;
     const openVideos = getWebviews().map(safeWebviewUrl).filter(isVideoUrl);
     const fcbPath = getQueryPath2(fcbUrl);
-    return (_a = openVideos.find((url) => Boolean(fcbPath) && getQueryPath2(url) === fcbPath)) != null ? _a : openVideos.length === 1 ? openVideos[0] : "";
+    return (_a = openVideos.find((url) => Boolean(fcbPath) && getQueryPath2(url) === fcbPath)) != null ? _a : "";
   }
   rememberVideoUrl(fcbUrl, videoUrl) {
     if (!isFcbUrl(fcbUrl) || !isVideoUrl(videoUrl)) return;
@@ -3321,18 +3319,17 @@ ${END_MARKER}`;
   attachWebview(webview) {
     if (this.observedWebviews.has(webview)) return;
     this.observedWebviews.add(webview);
+    let fcbContextUrl = "";
     const rememberContext = () => {
       const url = safeWebviewUrl(webview);
-      if (isFcbUrl(url)) this.mostRecentFcbUrl = url;
-      if (isVideoUrl(url) && this.mostRecentFcbUrl) this.rememberVideoUrl(this.mostRecentFcbUrl, url);
+      if (isFcbUrl(url)) fcbContextUrl = url;
     };
     const captureEventUrl = (event) => {
       var _a;
       const url = (_a = event.url) != null ? _a : "";
-      if (isVideoUrl(url)) {
-        const source = isFcbUrl(safeWebviewUrl(webview)) ? safeWebviewUrl(webview) : this.mostRecentFcbUrl;
-        if (source) this.rememberVideoUrl(source, url);
-      }
+      const currentUrl = safeWebviewUrl(webview);
+      if (isFcbUrl(currentUrl)) fcbContextUrl = currentUrl;
+      if (isVideoUrl(url) && fcbContextUrl) this.rememberVideoUrl(fcbContextUrl, url);
       window.setTimeout(rememberContext, 0);
     };
     ["did-navigate", "did-navigate-in-page", "new-window", "will-navigate"].forEach((name) => {
