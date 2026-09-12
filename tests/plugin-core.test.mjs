@@ -67,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, waitForNewVideoUrl, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, waitForNewVideoUrl, findFcbWebview, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -586,6 +586,23 @@ test("FCB resolution never guesses from an unrelated singleton video tab", () =>
   instance.settings = { videoByFcbUrl: {} };
   try {
     assert.equal(instance.resolveVideoUrl(fcbUrl, []), "");
+  } finally {
+    document.querySelectorAll = originalQuerySelectorAll;
+  }
+});
+
+test("FCB page and saved video mapping survive volatile URL parameter changes", () => {
+  const storedFcb = "https://pan.baidu.com/fcb/edit?fsid=123&token=old";
+  const currentFcb = "https://pan.baidu.com/fcb/edit?token=new&fsid=123";
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const webview = { getURL: () => currentFcb };
+  const originalQuerySelectorAll = document.querySelectorAll;
+  document.querySelectorAll = () => [webview];
+  const instance = Object.create(plugin.default.prototype);
+  instance.settings = { videoByFcbUrl: { [storedFcb]: videoUrl } };
+  try {
+    assert.equal(core.findFcbWebview(storedFcb), webview);
+    assert.equal(instance.resolveVideoUrl(currentFcb, []), videoUrl);
   } finally {
     document.querySelectorAll = originalQuerySelectorAll;
   }

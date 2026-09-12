@@ -2123,7 +2123,11 @@ function safeWebviewUrl(webview) {
 function findFcbWebview(url) {
   const candidates = getWebviews().filter((view) => isFcbUrl(safeWebviewUrl(view)));
   if (!url) return candidates[0];
-  return candidates.find((view) => samePage(safeWebviewUrl(view), url));
+  const identity = getFcbIdentity(url);
+  return candidates.find((view) => {
+    const candidateUrl = safeWebviewUrl(view);
+    return samePage(candidateUrl, url) || Boolean(identity && getFcbIdentity(candidateUrl) === identity);
+  });
 }
 function findActiveFcbWebview(app) {
   try {
@@ -3620,7 +3624,9 @@ ${END_MARKER}`;
       this.rememberVideoUrl(fcbUrl, validCandidate);
       return validCandidate;
     }
-    const remembered = this.settings.videoByFcbUrl[fcbUrl];
+    const fcbIdentity = getFcbIdentity(fcbUrl);
+    const rememberedEntry = Object.entries(this.settings.videoByFcbUrl || {}).find(([storedFcbUrl]) => storedFcbUrl === fcbUrl || Boolean(fcbIdentity && getFcbIdentity(storedFcbUrl) === fcbIdentity));
+    const remembered = rememberedEntry ? rememberedEntry[1] : "";
     if (remembered && isVideoUrl(remembered)) return remembered;
     const openVideos = getWebviews().map(safeWebviewUrl).filter(isVideoUrl);
     const fcbPath = getQueryPath2(fcbUrl);
