@@ -66,7 +66,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, managedSection, replaceOrInsertManagedSection, sameVideo, getQueryPath };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, managedSection, replaceOrInsertManagedSection, sameVideo, getQueryPath, redactDiagnosticText, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -115,7 +115,8 @@ test("plugin onload registers its Obsidian integrations without throwing", async
   assert.equal(instance.__editorExtensions.length, 1);
   assert.equal(instance.__postProcessors.length, 1);
   assert.equal(instance.__ribbons.length, 3);
-  assert.equal(instance.__commands.length, 7);
+  assert.equal(instance.__commands.length, 8);
+  assert.ok(instance.__commands.some((command) => command.id === "copy-last-baidu-import-diagnostics"));
   assert.ok(instance.__registrations.length >= 1);
 });
 
@@ -125,6 +126,32 @@ test("stable image identity removes expiring credentials but keeps content ident
   assert.equal(left, right);
   assert.match(left, /width=800/);
   assert.doesNotMatch(left, /secret|other|token=|ts=/);
+});
+
+test("diagnostic reports keep useful counts and redact URLs and credentials", () => {
+  const report = core.formatImportDiagnostics({
+    pluginVersion: "0.5.6",
+    startedAt: "2026-09-12T00:00:00.000Z",
+    operation: "video-note-and-subtitles",
+    status: "failed",
+    stage: "subtitle-extraction",
+    videoWebviewCount: 2,
+    error: "fetch https://pan.baidu.com/api?token=secret failed; BDUSS=private",
+    attempts: [{
+      attempt: 1,
+      view: 2,
+      source: "network-json",
+      cueCount: 114,
+      candidateCount: 3,
+      plainTextLength: 0,
+      error: "signature=hidden"
+    }]
+  });
+  assert.match(report, /video_webview_count: 2/);
+  assert.match(report, /cues=114/);
+  assert.match(report, /candidates=3/);
+  assert.doesNotMatch(report, /https?:|secret|private|hidden/);
+  assert.match(report, /\[URL\]|\[REDACTED\]/);
 });
 
 test("attachment folder stays beside the selected note folder", () => {
@@ -217,6 +244,8 @@ test("video import collects subtitles before scanning or writing Vault notes", a
   }
   assert.equal(noteScans, 0);
   assert.equal(vaultWrites, 0);
+  assert.equal(instance.lastImportDiagnostics.status, "failed");
+  assert.equal(instance.lastImportDiagnostics.stage, "subtitle-extraction");
 });
 
 test("optional subtitle fallback leaves the existing note unchanged", async () => {
@@ -296,6 +325,9 @@ test("successful video import commits subtitles once and opens the note after co
   };
   await instance.importCurrentNoteAndSubtitles();
   assert.deepEqual(order, ["collect", "find", "consolidate", "merge", "open"]);
+  assert.equal(instance.lastImportDiagnostics.status, "success");
+  assert.equal(instance.lastImportDiagnostics.stage, "complete");
+  assert.equal(instance.lastImportDiagnostics.subtitleCueCount, 5);
 });
 
 test("FCB resolution never guesses from an unrelated singleton video tab", () => {
