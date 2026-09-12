@@ -8,12 +8,23 @@ const root = resolve(import.meta.dirname, "..");
 const nativeRequire = createRequire(import.meta.url);
 
 class EmptyBase {}
+class PluginStub {
+  async loadData() { return {}; }
+  async saveData() {}
+  addSettingTab(value) { this.__settingTabs.push(value); }
+  registerEditorExtension(value) { this.__editorExtensions.push(value); }
+  registerMarkdownPostProcessor(value) { this.__postProcessors.push(value); }
+  addRibbonIcon(icon, title, callback) { this.__ribbons.push({ icon, title, callback }); }
+  addCommand(command) { this.__commands.push(command); }
+  register(callback) { this.__registrations.push(callback); }
+}
 class NoticeStub {
   setMessage() {}
   hide() {}
 }
 
 globalThis.document = {
+  body: {},
   querySelectorAll() {
     return [];
   },
@@ -31,10 +42,14 @@ globalThis.document = {
     };
   }
 };
+globalThis.MutationObserver = class {
+  observe() {}
+  disconnect() {}
+};
 
 function obsidianStub() {
   return new Proxy({
-    Plugin: EmptyBase,
+    Plugin: PluginStub,
     PluginSettingTab: EmptyBase,
     SuggestModal: EmptyBase,
     FuzzySuggestModal: EmptyBase,
@@ -54,7 +69,17 @@ function loadBundle() {
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
-    if (id === "@codemirror/view") return { WidgetType: EmptyBase };
+    if (id === "@codemirror/view") {
+      return {
+        WidgetType: EmptyBase,
+        Decoration: {
+          replace: () => ({ range: () => ({}) }),
+          set: () => ({})
+        },
+        ViewPlugin: { fromClass: () => ({}) },
+        EditorView: { domEventHandlers: () => ({}) }
+      };
+    }
     return nativeRequire(id);
   };
   const wrapper = vm.runInThisContext(`(function (exports, require, module, __filename, __dirname) { ${source}\n})`, { filename });
@@ -69,6 +94,28 @@ const test = (name, callback) => tests.push({ name, callback });
 
 test("release bundle loads and exports an Obsidian plugin", () => {
   assert.equal(typeof plugin.default, "function");
+});
+
+test("plugin onload registers its Obsidian integrations without throwing", async () => {
+  const instance = new plugin.default();
+  instance.__settingTabs = [];
+  instance.__editorExtensions = [];
+  instance.__postProcessors = [];
+  instance.__ribbons = [];
+  instance.__commands = [];
+  instance.__registrations = [];
+  instance.app = {
+    workspace: {
+      getActiveFile: () => null
+    }
+  };
+  await instance.onload();
+  assert.equal(instance.__settingTabs.length, 1);
+  assert.equal(instance.__editorExtensions.length, 1);
+  assert.equal(instance.__postProcessors.length, 1);
+  assert.equal(instance.__ribbons.length, 3);
+  assert.equal(instance.__commands.length, 7);
+  assert.ok(instance.__registrations.length >= 1);
 });
 
 test("stable image identity removes expiring credentials but keeps content identity", () => {
