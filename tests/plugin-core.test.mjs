@@ -67,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -257,6 +257,18 @@ test("plain transcript never replaces an existing timestamped section", () => {
   assert.equal(update.content, existing);
 });
 
+test("video note content combines refreshed AI text and subtitles in one transformation", () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const original = "# lesson\n\n<!-- BAIDU_AI_NOTE_START -->\nold AI note\n<!-- BAIDU_AI_NOTE_END -->\n";
+  const subtitles = { source: "network-json", cues: Array.from({ length: 5 }, (_, start) => ({ start, end: start + 1, text: `cue ${start}` })), plainText: "" };
+  const update = core.buildVideoNoteContentUpdate(original, "new AI note", videoUrl, subtitles, "2026-09-12T00:00:00.000Z");
+  assert.match(update.content, /new AI note/);
+  assert.doesNotMatch(update.content, /old AI note/);
+  assert.equal((update.content.match(/BAIDU_AI_NOTE_START/g) || []).length, 1);
+  assert.equal((update.content.match(/BAIDU_AI_SUBTITLE_START/g) || []).length, 1);
+  assert.ok(update.content.indexOf("BAIDU_AI_SUBTITLE_START") < update.content.indexOf("BAIDU_AI_NOTE_START"));
+});
+
 test("video identity uses Baidu path instead of expiring query parameters", () => {
   const left = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4&token=one";
   const right = "https://pan.baidu.com/pfile/video?token=two&path=%2Fcourse%2Flesson.mp4";
@@ -386,21 +398,24 @@ test("successful video import commits subtitles once and opens the note after co
     return [{ file }];
   };
   instance.selectCanonicalManagedVideoFile = async () => {
-    order.push("consolidate");
+    order.push("select");
     return file;
   };
-  instance.mergeOnlineSubtitlesIntoFile = async (target, url, result) => {
-    order.push("merge");
+  instance.commitVideoPageImport = async (target, snapshot, url, result, folder) => {
+    order.push("commit");
     assert.equal(target, file);
     assert.equal(url, videoUrl);
     assert.equal(result, transcript);
+    assert.equal(snapshot.title, "lesson");
+    assert.equal(folder, "notes");
+    return { file, noteStatus: "updated" };
   };
   instance.openFileInNewTab = async (target) => {
     order.push("open");
     assert.equal(target, file);
   };
   await instance.importCurrentNoteAndSubtitles();
-  assert.deepEqual(order, ["collect", "find", "consolidate", "merge", "open"]);
+  assert.deepEqual(order, ["collect", "find", "select", "commit", "open"]);
   assert.equal(instance.lastImportDiagnostics.status, "success");
   assert.equal(instance.lastImportDiagnostics.stage, "complete");
   assert.equal(instance.lastImportDiagnostics.subtitleCueCount, 5);
@@ -428,8 +443,47 @@ test("duplicate managed notes are preserved without cross-file content merging",
   }
   assert.equal(selected, canonical.file);
   assert.equal(contentWrites, 0);
-  assert.equal(frontmatterWrites, 1);
+  assert.equal(frontmatterWrites, 0);
   assert.equal(instance.lastImportDiagnostics.duplicateNoteCount, 1);
+});
+
+test("existing video note writes combined AI note and subtitles with one body update", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const file = { path: "notes/lesson.md", parent: { path: "notes" } };
+  const snapshot = { title: "lesson", html: "<p>new note</p>", fcbUrl: "", noteSource: "ai-note-tab-panel" };
+  const subtitles = { source: "network-json", cues: Array.from({ length: 5 }, (_, start) => ({ start, end: start + 1, text: `cue ${start}` })), plainText: "" };
+  const original = "# lesson\n\n<!-- BAIDU_AI_NOTE_START -->\nold note\n<!-- BAIDU_AI_NOTE_END -->\n";
+  let reads = 0;
+  let modifies = 0;
+  let written = "";
+  let frontmatterWrites = 0;
+  const instance = Object.create(plugin.default.prototype);
+  instance.settings = { attachmentsSubfolder: "attachments", downloadImages: true };
+  instance.app = {
+    metadataCache: { getFileCache: () => ({ frontmatter: { source: "baidu-video-note" } }) },
+    vault: {
+      read: async () => { reads += 1; return original; },
+      modify: async (_file, content) => { modifies += 1; written = content; }
+    },
+    fileManager: {
+      processFrontMatter: async (_file, callback) => {
+        frontmatterWrites += 1;
+        const fm = {};
+        callback(fm);
+        assert.equal(fm.video_path, "/course/lesson.mp4");
+        assert.equal(fm.subtitle_cues, 5);
+      }
+    }
+  };
+  instance.convertVideoPageMarkdown = async () => "new note";
+  const result = await instance.commitVideoPageImport(file, snapshot, videoUrl, subtitles, "notes");
+  assert.equal(result.file, file);
+  assert.equal(reads, 1);
+  assert.equal(modifies, 1);
+  assert.equal(frontmatterWrites, 1);
+  assert.match(written, /new note/);
+  assert.match(written, /BAIDU_AI_SUBTITLE_START/);
+  assert.doesNotMatch(written, /old note/);
 });
 
 test("FCB resolution never guesses from an unrelated singleton video tab", () => {

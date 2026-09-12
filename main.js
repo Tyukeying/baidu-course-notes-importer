@@ -2631,6 +2631,14 @@ function buildOnlineSubtitleUpdate(content, videoUrl, result, importedAt = (/* @
   const updatedContent = noteStart >= 0 ? `${baseContent.slice(0, noteStart).replace(/\s+$/, "")}\n\n${replacement}\n\n${baseContent.slice(noteStart).replace(/^\s+/, "")}` : `${baseContent.replace(/\s+$/, "")}\n\n${replacement}\n`;
   return { content: updatedContent, cues, plainText, importedAt, preserved: false };
 }
+function buildVideoNoteContentUpdate(content, markdown, videoUrl, subtitleResult, importedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  let nextContent = content;
+  if (typeof markdown === "string") {
+    const replacement = `${START_MARKER}\n${markdown}\n${END_MARKER}`;
+    nextContent = nextContent.includes(START_MARKER) && nextContent.includes(END_MARKER) ? replaceSectionBetweenMarkers(nextContent, START_MARKER, END_MARKER, replacement) : `${nextContent.replace(/\s+$/, "")}\n\n${replacement}\n`;
+  }
+  return buildOnlineSubtitleUpdate(nextContent, videoUrl, subtitleResult, importedAt);
+}
 var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
@@ -2916,38 +2924,9 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
           this.settings.notesFolder = selectedFolder;
           await this.saveSettings();
         }
-        const imageFolder = attachmentFolderForNoteFolder(targetFolder, this.settings.attachmentsSubfolder);
-        let noteStatus = "\u5DF2\u4FDD\u7559\u539F\u7B14\u8BB0";
-        if (!file) {
-          const markdown = snapshot.html ? await convertHtmlToMarkdown({
-            vault: this.app.vault,
-            html: snapshot.html,
-            noteTitle: snapshot.title,
-            attachmentsFolder: imageFolder,
-            downloadImages: this.settings.downloadImages,
-            videoUrl
-          }) : "## \u5B66\u4E60\u7B14\u8BB0\n\n> \u5F53\u524D\u89C6\u9891\u9875\u6CA1\u6709\u5411 Web Viewer \u66B4\u9732 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u53EF\u5728\u6B64\u7EE7\u7EED\u8BB0\u5F55\u3002";
-          const path = await this.createNotePath(snapshot.title, targetFolder);
-          file = await this.app.vault.create(path, this.composeVideoNote(snapshot.title, videoUrl, markdown, snapshot.fcbUrl, snapshot.noteSource));
-          noteStatus = snapshot.html ? "\u5DF2\u8BFB\u53D6\u89C6\u9891\u9875 AI \u7B14\u8BB0" : "\u5DF2\u521B\u5EFA\u5B66\u4E60\u7B14\u8BB0";
-        } else {
-          const fm = this.app.metadataCache.getFileCache(file) == null ? void 0 : this.app.metadataCache.getFileCache(file).frontmatter;
-          if (snapshot.html && (fm == null ? void 0 : fm.source) === "baidu-video-note") {
-            const markdown = await convertHtmlToMarkdown({
-              vault: this.app.vault,
-              html: snapshot.html,
-              noteTitle: snapshot.title,
-              attachmentsFolder: imageFolder,
-              downloadImages: this.settings.downloadImages,
-              videoUrl
-            });
-            await this.mergeVideoPageNoteIntoFile(file, markdown, snapshot);
-            noteStatus = ["linked-fcb-note", "fcb-editor"].includes(snapshot.noteSource) ? "\u5DF2\u66F4\u65B0\u767E\u5EA6 FCB AI \u7B14\u8BB0\u6B63\u6587" : "\u5DF2\u66F4\u65B0\u7ECF\u9A8C\u8BC1\u7684\u7F51\u9875 AI \u7B14\u8BB0\u6B63\u6587";
-          } else if (!snapshot.html) {
-            noteStatus = "\u672A\u8BFB\u5230\u65B0\u7684 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u5DF2\u5B89\u5168\u4FDD\u7559\u539F\u7B14\u8BB0";
-          }
-        }
-        await this.mergeOnlineSubtitlesIntoFile(file, videoUrl, subtitleResult);
+        const committed = await this.commitVideoPageImport(file, snapshot, videoUrl, subtitleResult, targetFolder);
+        file = committed.file;
+        let noteStatus = committed.noteStatus;
         if (selectedDifferentFolder) {
           file = await this.moveNoteToFolder(file, targetFolder);
           noteStatus += "\uFF0C\u5DF2\u79FB\u5230\u6240\u9009\u6587\u4EF6\u5939";
@@ -3140,6 +3119,64 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
     if (update.preserved) return;
     await this.app.vault.modify(file, update.content);
     await this.updateOnlineSubtitleFrontmatter(file, videoUrl, result, update);
+  }
+  async convertVideoPageMarkdown(snapshot, targetFolder, videoUrl) {
+    return await convertHtmlToMarkdown({
+      vault: this.app.vault,
+      html: snapshot.html,
+      noteTitle: snapshot.title,
+      attachmentsFolder: attachmentFolderForNoteFolder(targetFolder, this.settings.attachmentsSubfolder),
+      downloadImages: this.settings.downloadImages,
+      videoUrl
+    });
+  }
+  async commitVideoPageImport(file, snapshot, videoUrl, subtitleResult, targetFolder) {
+    let noteStatus = "\u5DF2\u4FDD\u7559\u539F\u7B14\u8BB0";
+    let noteUpdated = false;
+    let subtitleUpdate;
+    if (!file) {
+      const markdown = await this.convertVideoPageMarkdown(snapshot, targetFolder, videoUrl);
+      const initial = this.composeVideoNote(snapshot.title, videoUrl, markdown, snapshot.fcbUrl, snapshot.noteSource);
+      subtitleUpdate = buildVideoNoteContentUpdate(initial, null, videoUrl, subtitleResult);
+      const path = await this.createNotePath(snapshot.title, targetFolder);
+      file = await this.app.vault.create(path, subtitleUpdate.content);
+      noteStatus = "\u5DF2\u8BFB\u53D6\u89C6\u9891\u9875 AI \u7B14\u8BB0";
+      noteUpdated = true;
+    } else {
+      const fm = this.app.metadataCache.getFileCache(file) == null ? void 0 : this.app.metadataCache.getFileCache(file).frontmatter;
+      const shouldUpdateNote = Boolean(snapshot.html) && (fm == null ? void 0 : fm.source) === "baidu-video-note";
+      const markdown = shouldUpdateNote ? await this.convertVideoPageMarkdown(snapshot, targetFolder, videoUrl) : null;
+      const oldContent = await this.app.vault.read(file);
+      subtitleUpdate = buildVideoNoteContentUpdate(oldContent, markdown, videoUrl, subtitleResult);
+      if (subtitleUpdate.content !== oldContent) await this.app.vault.modify(file, subtitleUpdate.content);
+      if (shouldUpdateNote) {
+        noteStatus = ["linked-fcb-note", "fcb-editor"].includes(snapshot.noteSource) ? "\u5DF2\u66F4\u65B0\u767E\u5EA6 FCB AI \u7B14\u8BB0\u6B63\u6587" : "\u5DF2\u66F4\u65B0\u7ECF\u9A8C\u8BC1\u7684\u7F51\u9875 AI \u7B14\u8BB0\u6B63\u6587";
+        noteUpdated = true;
+      } else if (!snapshot.html) {
+        noteStatus = "\u672A\u8BFB\u5230\u65B0\u7684 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u5DF2\u5B89\u5168\u4FDD\u7559\u539F\u7B14\u8BB0";
+      }
+    }
+    await this.updateVideoImportFrontmatter(file, snapshot, videoUrl, subtitleResult, subtitleUpdate, noteUpdated);
+    return { file, noteStatus };
+  }
+  async updateVideoImportFrontmatter(file, snapshot, videoUrl, subtitleResult, subtitleUpdate, noteUpdated) {
+    await this.app.fileManager.processFrontMatter(file, (fm) => {
+      fm.video_url = videoUrl;
+      fm.video_path = getQueryPath(videoUrl);
+      if (noteUpdated) {
+        fm.fcb_url = snapshot.fcbUrl || fm.fcb_url || "";
+        fm.web_note_source = snapshot.noteSource || "video-page-note";
+        fm.note_imported_at = (/* @__PURE__ */ new Date()).toISOString();
+      }
+      if (!subtitleUpdate.preserved) {
+        const cues = subtitleUpdate.cues;
+        fm.subtitle_source = `web-viewer:${subtitleResult.source}`;
+        fm.subtitle_cues = cues.length;
+        fm.subtitle_format = cues.length ? "timestamped" : "plain-transcript";
+        fm.subtitle_duration = Math.round(cues.reduce((max, cue) => Math.max(max, cue.end || cue.start), 0) * 1e3) / 1e3;
+        fm.subtitle_imported_at = subtitleUpdate.importedAt;
+      }
+    });
   }
   async updateOnlineSubtitleFrontmatter(file, videoUrl, result, update) {
     const cues = update.cues;
@@ -3650,10 +3687,6 @@ ${END_MARKER}`;
   async selectCanonicalManagedVideoFile(matches, videoUrl) {
     if (!matches.length) return null;
     const canonical = matches[0];
-    await this.app.fileManager.processFrontMatter(canonical.file, (fm) => {
-      fm.video_url = videoUrl;
-      fm.video_path = getQueryPath(videoUrl);
-    });
     if (matches.length > 1) {
       this.updateImportDiagnostics({ duplicateNoteCount: matches.length - 1 });
       console.info("Baidu Course Notes Importer: duplicate notes preserved without merging; selected canonical file", canonical.file.path, matches.slice(1).map((item) => item.file.path));
@@ -3694,6 +3727,7 @@ ${END_MARKER}
       "cssclasses:",
       "  - baidu-ai-note",
       `video_url: ${yamlString(videoUrl)}`,
+      `video_path: ${yamlString(getQueryPath(videoUrl))}`,
       `fcb_url: ${yamlString(fcbUrl || "")}`,
       `web_note_source: ${yamlString(noteSource || "video-page-empty")}`,
       `imported_at: ${yamlString((/* @__PURE__ */ new Date()).toISOString())}`,
@@ -3707,19 +3741,6 @@ ${START_MARKER}
 ${markdown}
 ${END_MARKER}
 `;
-  }
-  async mergeVideoPageNoteIntoFile(file, markdown, snapshot) {
-    const replacement = `${START_MARKER}\n${markdown}\n${END_MARKER}`;
-    const oldContent = await this.app.vault.read(file);
-    const newContent = oldContent.includes(START_MARKER) && oldContent.includes(END_MARKER) ? replaceSectionBetweenMarkers(oldContent, START_MARKER, END_MARKER, replacement) : `${oldContent.replace(/\s+$/, "")}\n\n${replacement}\n`;
-    await this.app.vault.modify(file, newContent);
-    await this.app.fileManager.processFrontMatter(file, (fm) => {
-      fm.video_url = snapshot.url;
-      fm.video_path = getQueryPath(snapshot.url);
-      fm.fcb_url = snapshot.fcbUrl || fm.fcb_url || "";
-      fm.web_note_source = snapshot.noteSource || "video-page-note";
-      fm.note_imported_at = (/* @__PURE__ */ new Date()).toISOString();
-    });
   }
   async createNotePath(title, targetFolder = this.settings.notesFolder) {
     const folder = (0, import_obsidian4.normalizePath)(String(targetFolder || "").trim().replace(/^[/\\]+|[/\\]+$/g, ""));
