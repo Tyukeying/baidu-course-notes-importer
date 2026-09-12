@@ -2507,8 +2507,6 @@ async function waitForNewVideoUrl(webview, before, timeoutMs) {
     if (isVideoUrl(navigatedCurrent)) return navigatedCurrent;
     await delay(300);
   }
-  const remaining = getWebviews().map(safeWebviewUrl).filter(isVideoUrl);
-  if (remaining.length === 1) return remaining[0];
   return "";
 }
 async function seekWebview(webview, seconds) {

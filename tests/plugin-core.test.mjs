@@ -67,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, waitForNewVideoUrl, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -555,6 +555,18 @@ test("FCB resolution never guesses from an unrelated singleton video tab", () =>
   instance.settings = { videoByFcbUrl: {} };
   try {
     assert.equal(instance.resolveVideoUrl(fcbUrl, []), "");
+  } finally {
+    document.querySelectorAll = originalQuerySelectorAll;
+  }
+});
+
+test("FCB auto-open timeout never falls back to an unrelated singleton video", async () => {
+  const unrelatedVideo = { getURL: () => "https://pan.baidu.com/pfile/video?path=%2Fother%2Funrelated.mp4" };
+  const fcbWebview = { getURL: () => "https://pan.baidu.com/fcb/edit?fsid=123" };
+  const originalQuerySelectorAll = document.querySelectorAll;
+  document.querySelectorAll = () => [unrelatedVideo, fcbWebview];
+  try {
+    assert.equal(await core.waitForNewVideoUrl(fcbWebview, new Set(), 0), "");
   } finally {
     document.querySelectorAll = originalQuerySelectorAll;
   }
