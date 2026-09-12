@@ -124,6 +124,29 @@ test("plugin onload registers its Obsidian integrations without throwing", async
   assert.ok(instance.__registrations.length >= 1);
 });
 
+test("concurrent import commands are ignored until the active operation finishes", async () => {
+  const instance = Object.create(plugin.default.prototype);
+  instance.importOperationRunning = false;
+  let runs = 0;
+  let finish;
+  const gate = new Promise((resolve) => { finish = resolve; });
+  const first = instance.runImportOperation(async () => {
+    runs += 1;
+    await gate;
+    return "done";
+  });
+  await Promise.resolve();
+  const second = await instance.runImportOperation(async () => {
+    runs += 1;
+    return "duplicate";
+  });
+  assert.equal(second, undefined);
+  assert.equal(runs, 1);
+  finish();
+  assert.equal(await first, "done");
+  assert.equal(instance.importOperationRunning, false);
+});
+
 test("stable image identity removes expiring credentials but keeps content identity", () => {
   const left = core.stableImageIdentity("https://example.com/image.jpg?width=800&token=secret&ts=1730000000000");
   const right = core.stableImageIdentity("https://example.com/image.jpg?ts=1740000000000&token=other&width=800");

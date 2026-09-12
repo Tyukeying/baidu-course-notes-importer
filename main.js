@@ -2670,6 +2670,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
     this.settings = DEFAULT_SETTINGS;
     this.observedWebviews = /* @__PURE__ */ new WeakSet();
     this.lastImportDiagnostics = null;
+    this.importOperationRunning = false;
   }
   async onload() {
     await this.loadSettings();
@@ -2707,35 +2708,35 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       });
     });
     this.addRibbonIcon("file-down", "\u4ECE\u5F53\u524D\u767E\u5EA6\u89C6\u9891\u9875\u5BFC\u5165\u7B14\u8BB0\u548C\u5B57\u5E55", () => {
-      void this.importCurrentNoteAndSubtitles();
+      void this.runImportOperation(() => this.importCurrentNoteAndSubtitles());
     });
     this.addRibbonIcon("file-text", "\u4ECE\u5F53\u524D\u767E\u5EA6 FCB \u5728\u7EBF\u6587\u6863\u5BFC\u5165 AI \u7B14\u8BB0\u548C\u5B57\u5E55", () => {
-      void this.importCurrentNote();
+      void this.runImportOperation(() => this.importCurrentNote());
     });
     this.addCommand({
       id: "import-current-baidu-note-and-subtitles",
       name: "\u4ECE\u5F53\u524D\u767E\u5EA6\u89C6\u9891\u9875\u5BFC\u5165\u7B14\u8BB0\u548C\u5B57\u5E55",
-      callback: () => void this.importCurrentNoteAndSubtitles()
+      callback: () => void this.runImportOperation(() => this.importCurrentNoteAndSubtitles())
     });
     this.addCommand({
       id: "import-current-baidu-ai-note",
       name: "\u4ECE\u5F53\u524D\u767E\u5EA6 FCB \u5728\u7EBF\u6587\u6863\u5BFC\u5165 AI \u7B14\u8BB0\u548C\u5B57\u5E55",
-      callback: () => void this.importCurrentNote()
+      callback: () => void this.runImportOperation(() => this.importCurrentNote())
     });
     this.addCommand({
       id: "import-all-open-baidu-ai-notes",
       name: "\u5BFC\u5165\u6240\u6709\u5DF2\u6253\u5F00\u7684\u767E\u5EA6 AI \u7B14\u8BB0",
-      callback: () => void this.importAllOpenNotes()
+      callback: () => void this.runImportOperation(() => this.importAllOpenNotes())
     });
     this.addCommand({
       id: "sync-current-baidu-ai-note",
       name: "\u5237\u65B0\u5F53\u524D\u767E\u5EA6 AI \u7B14\u8BB0\u5185\u5BB9",
-      callback: () => void this.refreshCurrentNote()
+      callback: () => void this.runImportOperation(() => this.refreshCurrentNote())
     });
     this.addCommand({
       id: "import-online-subtitles-for-current-note",
       name: "\u4ECE Web Viewer \u66F4\u65B0\u5F53\u524D\u7B14\u8BB0\u7684\u5B8C\u6574\u5B57\u5E55",
-      callback: () => void this.importOnlineSubtitlesForCurrentNote()
+      callback: () => void this.runImportOperation(() => this.importOnlineSubtitlesForCurrentNote())
     });
     this.addCommand({
       id: "open-current-baidu-video",
@@ -2747,12 +2748,12 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       }
     });
     this.addRibbonIcon("captions", "\u4ECE\u767E\u5EA6\u7F51\u76D8\u5BA2\u6237\u7AEF\u7F13\u5B58\u5BFC\u5165\u8BFE\u7A0B\u7B14\u8BB0", () => {
-      void this.importSubtitleFromCache();
+      void this.runImportOperation(() => this.importSubtitleFromCache());
     });
     this.addCommand({
       id: "import-baidu-course-note-from-cache",
       name: "\u4ECE\u767E\u5EA6\u7F51\u76D8\u5BA2\u6237\u7AEF\u7F13\u5B58\u5BFC\u5165\u8BFE\u7A0B\u7B14\u8BB0\uFF08AI \u7B14\u8BB0 + \u5B57\u5E55\uFF09",
-      callback: () => void this.importSubtitleFromCache()
+      callback: () => void this.runImportOperation(() => this.importSubtitleFromCache())
     });
     this.addCommand({
       id: "copy-last-baidu-import-diagnostics",
@@ -2787,6 +2788,18 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
   }
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+  async runImportOperation(callback) {
+    if (this.importOperationRunning) {
+      new import_obsidian4.Notice("\u5DF2\u6709\u4E00\u4E2A\u767E\u5EA6\u7B14\u8BB0\u5BFC\u5165\u6216\u5237\u65B0\u4EFB\u52A1\u6B63\u5728\u8FDB\u884C\uFF0C\u8BF7\u7B49\u5F85\u5B8C\u6210\u540E\u518D\u8BD5\u3002", 5e3);
+      return void 0;
+    }
+    this.importOperationRunning = true;
+    try {
+      return await callback();
+    } finally {
+      this.importOperationRunning = false;
+    }
   }
   beginImportDiagnostics(operation) {
     this.lastImportDiagnostics = {
