@@ -8,8 +8,15 @@ const root = resolve(import.meta.dirname, "..");
 const nativeRequire = createRequire(import.meta.url);
 
 class EmptyBase {}
+class NoticeStub {
+  setMessage() {}
+  hide() {}
+}
 
 globalThis.document = {
+  querySelectorAll() {
+    return [];
+  },
   createElement() {
     return {
       value: "",
@@ -31,7 +38,7 @@ function obsidianStub() {
     PluginSettingTab: EmptyBase,
     SuggestModal: EmptyBase,
     FuzzySuggestModal: EmptyBase,
-    Notice: EmptyBase,
+    Notice: NoticeStub,
     MarkdownView: EmptyBase,
     normalizePath: (value) => String(value).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\.\//, "")
   }, {
@@ -112,6 +119,72 @@ test("video identity uses Baidu path instead of expiring query parameters", () =
   const right = "https://pan.baidu.com/pfile/video?token=two&path=%2Fcourse%2Flesson.mp4";
   assert.equal(core.getQueryPath(left), "/course/lesson.mp4");
   assert.equal(core.sameVideo(left, right), true);
+});
+
+test("video import collects subtitles before scanning or writing Vault notes", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const webview = {
+    getURL: () => videoUrl,
+    executeJavaScript: async () => ({
+      url: videoUrl,
+      title: "lesson",
+      html: "<p>AI note</p>",
+      text: "AI note",
+      noteSource: "ai-note-tab-panel",
+      fcbUrl: ""
+    })
+  };
+  let vaultWrites = 0;
+  let noteScans = 0;
+  const instance = Object.create(plugin.default.prototype);
+  instance.settings = {
+    videoByFcbUrl: {},
+    notesFolder: "notes",
+    attachmentsSubfolder: "attachments",
+    chooseFolderOnImport: false,
+    downloadImages: true
+  };
+  instance.app = {
+    workspace: {
+      activeLeaf: { view: { containerEl: { querySelectorAll: () => [webview] } } },
+      getMostRecentLeaf: () => null
+    },
+    vault: {
+      create: async () => { vaultWrites += 1; }
+    }
+  };
+  instance.findManagedFilesByVideoUrl = async () => {
+    noteScans += 1;
+    return [];
+  };
+  instance.collectOnlineSubtitles = async () => {
+    throw new Error("subtitle unavailable");
+  };
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await instance.importCurrentNoteAndSubtitles();
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(noteScans, 0);
+  assert.equal(vaultWrites, 0);
+});
+
+test("optional subtitle fallback leaves the existing note unchanged", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const file = { path: "notes/lesson.md" };
+  const instance = Object.create(plugin.default.prototype);
+  instance.app = { workspace: { activeLeaf: null, getMostRecentLeaf: () => null } };
+  instance.collectOnlineSubtitles = async () => ({ source: "unavailable", cues: [], plainText: "" });
+  let merges = 0;
+  let opens = 0;
+  instance.mergeOnlineSubtitlesIntoFile = async () => { merges += 1; };
+  instance.openFileInNewTab = async () => { opens += 1; };
+  const result = await instance.importOnlineSubtitlesForCurrentNote(file, videoUrl, { setMessage() {} }, undefined, true);
+  assert.equal(result.source, "unavailable");
+  assert.equal(merges, 0);
+  assert.equal(opens, 1);
 });
 
 let failures = 0;

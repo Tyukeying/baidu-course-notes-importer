@@ -2716,6 +2716,8 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
             console.warn("Baidu Course Notes Importer: linked FCB AI note extraction failed", linkedFcbUrl, fcbError);
           }
         }
+        notice.setMessage("\u6B63\u5728\u8BFB\u53D6\u5E76\u9A8C\u8BC1\u5B8C\u6574\u5B57\u5E55\u2026");
+        const subtitleResult = await this.collectOnlineSubtitles(videoUrl, notice, activeVideoWebview, false);
         const matches = await this.findManagedFilesByVideoUrl(videoUrl);
         let file = matches.length ? await this.consolidateManagedVideoFiles(matches, videoUrl) : null;
         if (!file && !snapshot.html) {
@@ -2767,13 +2769,14 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
             noteStatus = "\u672A\u8BFB\u5230\u65B0\u7684 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u5DF2\u5B89\u5168\u4FDD\u7559\u539F\u7B14\u8BB0";
           }
         }
-        const result = await this.importOnlineSubtitlesForCurrentNote(file, videoUrl, notice, activeVideoWebview, false);
+        await this.mergeOnlineSubtitlesIntoFile(file, videoUrl, subtitleResult);
         if (selectedDifferentFolder) {
           file = await this.moveNoteToFolder(file, targetFolder);
           noteStatus += "\uFF0C\u5DF2\u79FB\u5230\u6240\u9009\u6587\u4EF6\u5939";
         }
+        await this.openFileInNewTab(file);
         notice.hide();
-        new import_obsidian4.Notice(result.cues.length ? `${noteStatus}\uFF1B\u5DF2\u5BFC\u5165 ${result.cues.length} \u6761\u5B57\u5E55` : result.plainText ? `${noteStatus}\uFF1B\u5DF2\u5BFC\u5165\u767E\u5EA6\u7F51\u9875\u6587\u7A3F` : `${noteStatus}\uFF1B\u672C\u6B21\u672A\u8BFB\u5230\u5B8C\u6574\u5B57\u5E55\uFF0C\u7B14\u8BB0\u5DF2\u4FDD\u5B58`, 8e3);
+        new import_obsidian4.Notice(subtitleResult.cues.length ? `${noteStatus}\uFF1B\u5DF2\u5BFC\u5165 ${subtitleResult.cues.length} \u6761\u5B57\u5E55` : subtitleResult.plainText ? `${noteStatus}\uFF1B\u5DF2\u5BFC\u5165\u767E\u5EA6\u7F51\u9875\u6587\u7A3F` : `${noteStatus}\uFF1B\u672C\u6B21\u672A\u8BFB\u5230\u5B8C\u6574\u5B57\u5E55\uFF0C\u7B14\u8BB0\u5DF2\u4FDD\u5B58`, 8e3);
         return;
       }
       let file = this.getActiveManagedFile();
@@ -2814,9 +2817,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       new import_obsidian4.Notice(`\u7F51\u9875\u5BFC\u5165\u5931\u8D25\uFF1A${messageOf(error)}`, 1e4);
     }
   }
-  async importOnlineSubtitlesForCurrentNote(file, videoUrl, existingNotice, preferredWebview, allowMissing = false) {
-    const ownNotice = existingNotice ? null : new import_obsidian4.Notice("\u6B63\u5728\u4ECE Web Viewer \u8BFB\u53D6\u5B8C\u6574\u5B57\u5E55\u2026", 0);
-    const notice = existingNotice || ownNotice;
+  async collectOnlineSubtitles(targetVideoUrl, notice, preferredWebview, allowMissing = false) {
     let temporaryVideoWebview = null;
     const closeTemporaryVideo = () => {
       if (!temporaryVideoWebview || this.settings.openVideoAfterImport) return;
@@ -2824,16 +2825,8 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       temporaryVideoWebview = null;
     };
     try {
-      let targetFile = file || this.getActiveManagedFile();
-      let targetVideoUrl = videoUrl || "";
       let videoWebview = preferredWebview || findActiveVideoWebview(this.app, targetVideoUrl);
       if (!targetVideoUrl && videoWebview) targetVideoUrl = safeWebviewUrl(videoWebview);
-      if (!targetFile && targetVideoUrl) targetFile = this.findManagedFileByVideoUrl(targetVideoUrl);
-      if (!targetFile) throw new Error("\u8BF7\u5148\u6253\u5F00\u7531\u672C\u63D2\u4EF6\u5BFC\u5165\u7684\u767E\u5EA6 AI \u7B14\u8BB0\uFF0C\u6216\u5728\u5BF9\u5E94\u89C6\u9891\u9875\u8FD0\u884C\u7B14\u8BB0\u4E0E\u5B57\u5E55\u5BFC\u5165\u3002");
-      if (!targetVideoUrl) {
-        const frontmatter = this.app.metadataCache.getFileCache(targetFile) == null ? void 0 : this.app.metadataCache.getFileCache(targetFile).frontmatter;
-        targetVideoUrl = typeof (frontmatter == null ? void 0 : frontmatter.video_url) === "string" ? frontmatter.video_url : "";
-      }
       if (!isVideoUrl(targetVideoUrl)) throw new Error("\u5F53\u524D\u7B14\u8BB0\u8FD8\u6CA1\u6709\u6709\u6548\u7684\u767E\u5EA6\u5927\u89C6\u9891\u5730\u5740\u3002");
       if (!videoWebview) {
         notice.setMessage("\u6B63\u5728 Media Extended / Web Viewer \u4E2D\u6253\u5F00\u5927\u89C6\u9891\u2026");
@@ -2879,23 +2872,46 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       if (!hasCompleteTimedSubtitles(best) && !best.plainText) {
         if (allowMissing) {
           closeTemporaryVideo();
-          await this.openFileInNewTab(targetFile);
           return { source: "unavailable", cues: [], plainText: "" };
         }
         throw new Error("\u672A\u627E\u5230\u5B8C\u6574\u5B57\u5E55\u3002\u8BF7\u5728\u767E\u5EA6\u5927\u89C6\u9891\u9875\u5F00\u542F AI \u5B57\u5E55\uFF0C\u64AD\u653E 3\u20135 \u79D2\uFF1B\u5982 Media Extended \u663E\u793A\u201C\u6253\u5F00\u8F6C\u5F55\u6587\u7A3F\u201D\uFF0C\u4E5F\u53EF\u5148\u6253\u5F00\u540E\u91CD\u8BD5\u3002");
       }
       if (!hasCompleteTimedSubtitles(best)) best.cues = [];
       best.cues = normalizeOnlineCues(best.cues);
-      await this.mergeOnlineSubtitlesIntoFile(targetFile, targetVideoUrl, best);
       closeTemporaryVideo();
-      await this.openFileInNewTab(targetFile);
-      if (ownNotice) {
-        ownNotice.hide();
-        new import_obsidian4.Notice(best.cues.length ? `\u5DF2\u66F4\u65B0 ${best.cues.length} \u6761\u7F51\u9875\u5B57\u5E55\uFF08${subtitleSourceLabel(best.source)}\uFF09` : `\u5DF2\u66F4\u65B0\u767E\u5EA6\u7F51\u9875\u6587\u7A3F`, 7e3);
-      }
       return best;
     } catch (error) {
       closeTemporaryVideo();
+      throw error;
+    }
+  }
+  async importOnlineSubtitlesForCurrentNote(file, videoUrl, existingNotice, preferredWebview, allowMissing = false) {
+    const ownNotice = existingNotice ? null : new import_obsidian4.Notice("\u6B63\u5728\u4ECE Web Viewer \u8BFB\u53D6\u5B8C\u6574\u5B57\u5E55\u2026", 0);
+    const notice = existingNotice || ownNotice;
+    try {
+      let targetFile = file || this.getActiveManagedFile();
+      let targetVideoUrl = videoUrl || "";
+      const currentWebview = preferredWebview || findActiveVideoWebview(this.app, targetVideoUrl);
+      if (!targetVideoUrl && currentWebview) targetVideoUrl = safeWebviewUrl(currentWebview);
+      if (!targetFile && targetVideoUrl) targetFile = this.findManagedFileByVideoUrl(targetVideoUrl);
+      if (!targetFile) throw new Error("\u8BF7\u5148\u6253\u5F00\u7531\u672C\u63D2\u4EF6\u5BFC\u5165\u7684\u767E\u5EA6 AI \u7B14\u8BB0\uFF0C\u6216\u5728\u5BF9\u5E94\u89C6\u9891\u9875\u8FD0\u884C\u7B14\u8BB0\u4E0E\u5B57\u5E55\u5BFC\u5165\u3002");
+      if (!targetVideoUrl) {
+        const frontmatter = this.app.metadataCache.getFileCache(targetFile) == null ? void 0 : this.app.metadataCache.getFileCache(targetFile).frontmatter;
+        targetVideoUrl = typeof (frontmatter == null ? void 0 : frontmatter.video_url) === "string" ? frontmatter.video_url : "";
+      }
+      const best = await this.collectOnlineSubtitles(targetVideoUrl, notice, currentWebview, allowMissing);
+      if (best.source !== "unavailable") await this.mergeOnlineSubtitlesIntoFile(targetFile, targetVideoUrl, best);
+      await this.openFileInNewTab(targetFile);
+      if (ownNotice) {
+        ownNotice.hide();
+        if (best.source === "unavailable") {
+          new import_obsidian4.Notice("\u672C\u6B21\u672A\u8BFB\u5230\u5B8C\u6574\u5B57\u5E55\uFF0C\u539F\u7B14\u8BB0\u672A\u6539\u52A8", 7e3);
+        } else {
+          new import_obsidian4.Notice(best.cues.length ? `\u5DF2\u66F4\u65B0 ${best.cues.length} \u6761\u7F51\u9875\u5B57\u5E55\uFF08${subtitleSourceLabel(best.source)}\uFF09` : `\u5DF2\u66F4\u65B0\u767E\u5EA6\u7F51\u9875\u6587\u7A3F`, 7e3);
+        }
+      }
+      return best;
+    } catch (error) {
       if (ownNotice) {
         ownNotice.hide();
         console.error("Baidu Course Notes Importer online subtitle import failed", error);
