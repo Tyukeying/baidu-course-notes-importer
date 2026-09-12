@@ -3361,7 +3361,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
   async commitPreparedWebviewImport(prepared, webview, keepVideoAfterImport, openFile = true, subtitleResult = null) {
     if (prepared.skipped) {
       if (subtitleResult) await this.mergeOnlineSubtitlesIntoFile(prepared.file, prepared.videoUrl, subtitleResult);
-      if (openFile) await this.openFileReplacingWebview(webview, prepared.file);
+      if (openFile) await this.openFileInNewTab(prepared.file);
       if (keepVideoAfterImport && prepared.videoUrl) await this.openVideo(prepared.videoUrl);
       return { file: prepared.file, videoUrl: prepared.videoUrl, skipped: true };
     }
@@ -3376,7 +3376,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       }
       const file = await this.app.vault.create(path, content);
       if (subtitleUpdate && !subtitleUpdate.preserved) await this.updateOnlineSubtitleFrontmatter(file, prepared.videoUrl, subtitleResult, subtitleUpdate);
-      if (openFile) await this.openFileReplacingWebview(webview, file);
+      if (openFile) await this.openFileInNewTab(file);
       if (keepVideoAfterImport && prepared.videoUrl) await this.openVideo(prepared.videoUrl);
       return { file, videoUrl: prepared.videoUrl, skipped: false };
     } finally {
@@ -3742,9 +3742,6 @@ ${END_MARKER}
     }
     await this.app.fileManager.renameFile(file, destination);
     return file;
-  }
-  async openFileReplacingWebview(webview, file) {
-    await this.openFileInNewTab(file);
   }
   async openFileInNewTab(file) {
     let existingLeaf = null;

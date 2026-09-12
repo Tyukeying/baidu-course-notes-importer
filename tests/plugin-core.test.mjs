@@ -480,7 +480,7 @@ test("committing a previously imported FCB note preserves open behavior", async 
   const prepared = { skipped: true, file, videoUrl, temporaryVideoViews: [] };
   const order = [];
   const instance = Object.create(plugin.default.prototype);
-  instance.openFileReplacingWebview = async (_webview, target) => { order.push("open-note"); assert.equal(target, file); };
+  instance.openFileInNewTab = async (target) => { order.push("open-note"); assert.equal(target, file); };
   instance.openVideo = async (target) => { order.push("open-video"); assert.equal(target, videoUrl); };
   const result = await instance.commitPreparedWebviewImport(prepared, {}, true, true);
   assert.equal(result.skipped, true);
@@ -539,7 +539,7 @@ test("new FCB note is created once with AI note and subtitles already combined",
   instance.createNotePath = async () => file.path;
   instance.composeNote = () => "# lesson\n\n<!-- BAIDU_AI_NOTE_START -->\nAI note\n<!-- BAIDU_AI_NOTE_END -->\n";
   instance.updateOnlineSubtitleFrontmatter = async () => { frontmatterUpdates += 1; };
-  instance.openFileReplacingWebview = async () => {};
+  instance.openFileInNewTab = async () => {};
   instance.closeWebviewLeaves = () => {};
   const result = await instance.commitPreparedWebviewImport(prepared, {}, false, true, subtitles);
   assert.equal(result.file, file);
