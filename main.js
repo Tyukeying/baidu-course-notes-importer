@@ -3283,61 +3283,74 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
     await this.app.fileManager.renameFile(file, desired);
     return file;
   }
-  async importWebview(webview, notice, keepVideoAfterImport, askFolder = true) {
+  async prepareWebviewImport(webview, notice, askFolder = true, keepVideoAfterImport = false) {
     var _a, _b;
     let temporaryVideoViews = [];
-    const currentUrl = safeWebviewUrl(webview);
-    const existingBeforeCapture = currentUrl ? this.findImportedFile(currentUrl) : null;
-    if (existingBeforeCapture) {
-      await this.openFileReplacingWebview(webview, existingBeforeCapture);
-      const fm = (_a = this.app.metadataCache.getFileCache(existingBeforeCapture)) == null ? void 0 : _a.frontmatter;
-      const existingVideoUrl = typeof (fm == null ? void 0 : fm.video_url) === "string" ? fm.video_url : "";
-      if (keepVideoAfterImport && existingVideoUrl) await this.openVideo(existingVideoUrl);
-      return { file: existingBeforeCapture, videoUrl: existingVideoUrl, skipped: true };
+    try {
+      const currentUrl = safeWebviewUrl(webview);
+      const existingBeforeCapture = currentUrl ? this.findImportedFile(currentUrl) : null;
+      if (existingBeforeCapture) {
+        const fm = (_a = this.app.metadataCache.getFileCache(existingBeforeCapture)) == null ? void 0 : _a.frontmatter;
+        const existingVideoUrl = typeof (fm == null ? void 0 : fm.video_url) === "string" ? fm.video_url : "";
+        return { file: existingBeforeCapture, videoUrl: existingVideoUrl, skipped: true, temporaryVideoViews };
+      }
+      const snapshot = await extractFcbSnapshot(webview);
+      const existingAfterCapture = this.findImportedFile(snapshot.url);
+      if (existingAfterCapture) {
+        const fm = (_b = this.app.metadataCache.getFileCache(existingAfterCapture)) == null ? void 0 : _b.frontmatter;
+        const existingVideoUrl = typeof (fm == null ? void 0 : fm.video_url) === "string" ? fm.video_url : "";
+        return { file: existingAfterCapture, videoUrl: existingVideoUrl, skipped: true, temporaryVideoViews };
+      }
+      let videoUrl = this.resolveVideoUrl(snapshot.url, snapshot.videoUrlCandidates);
+      if (!videoUrl) {
+        notice.setMessage("\u6B63\u5728\u81EA\u52A8\u83B7\u53D6\u767E\u5EA6\u5927\u89C6\u9891\u5730\u5740\u2026");
+        const beforeAutoOpen = new Set(getWebviews());
+        const openedUrl = await autoOpenLargeVideo(webview);
+        temporaryVideoViews = this.findTemporaryVideoViews(beforeAutoOpen, webview);
+        videoUrl = this.resolveVideoUrl(snapshot.url, openedUrl ? [openedUrl] : []);
+      }
+      let targetFolder = this.settings.notesFolder;
+      if (askFolder && this.settings.chooseFolderOnImport) {
+        const selected = await this.chooseImportFolder();
+        if (selected === null) throw new Error("\u5DF2\u53D6\u6D88\u5BFC\u5165");
+        targetFolder = selected;
+        this.settings.notesFolder = selected;
+        await this.saveSettings();
+      }
+      return { snapshot, videoUrl, targetFolder, skipped: false, temporaryVideoViews };
+    } catch (error) {
+      if (!keepVideoAfterImport) this.closeWebviewLeaves(temporaryVideoViews);
+      throw error;
     }
-    const snapshot = await extractFcbSnapshot(webview);
-    const existingAfterCapture = this.findImportedFile(snapshot.url);
-    if (existingAfterCapture) {
-      await this.openFileReplacingWebview(webview, existingAfterCapture);
-      const fm = (_b = this.app.metadataCache.getFileCache(existingAfterCapture)) == null ? void 0 : _b.frontmatter;
-      const existingVideoUrl = typeof (fm == null ? void 0 : fm.video_url) === "string" ? fm.video_url : "";
-      if (keepVideoAfterImport && existingVideoUrl) await this.openVideo(existingVideoUrl);
-      return { file: existingAfterCapture, videoUrl: existingVideoUrl, skipped: true };
+  }
+  async commitPreparedWebviewImport(prepared, webview, keepVideoAfterImport, openFile = true) {
+    if (prepared.skipped) {
+      if (openFile) await this.openFileReplacingWebview(webview, prepared.file);
+      if (keepVideoAfterImport && prepared.videoUrl) await this.openVideo(prepared.videoUrl);
+      return { file: prepared.file, videoUrl: prepared.videoUrl, skipped: true };
     }
-    let videoUrl = this.resolveVideoUrl(snapshot.url, snapshot.videoUrlCandidates);
-    if (!videoUrl) {
-      notice.setMessage("\u6B63\u5728\u81EA\u52A8\u83B7\u53D6\u767E\u5EA6\u5927\u89C6\u9891\u5730\u5740\u2026");
-      const beforeAutoOpen = new Set(getWebviews());
-      const openedUrl = await autoOpenLargeVideo(webview);
-      temporaryVideoViews = this.findTemporaryVideoViews(beforeAutoOpen, webview);
-      videoUrl = this.resolveVideoUrl(snapshot.url, openedUrl ? [openedUrl] : []);
+    try {
+      const markdown = await convertHtmlToMarkdown({
+        vault: this.app.vault,
+        html: prepared.snapshot.html,
+        noteTitle: prepared.snapshot.title,
+        attachmentsFolder: attachmentFolderForNoteFolder(prepared.targetFolder, this.settings.attachmentsSubfolder),
+        downloadImages: this.settings.downloadImages,
+        videoUrl: prepared.videoUrl
+      });
+      const path = await this.createNotePath(prepared.snapshot.title, prepared.targetFolder);
+      const content = this.composeNote(prepared.snapshot.title, prepared.snapshot.url, prepared.videoUrl, markdown);
+      const file = await this.app.vault.create(path, content);
+      if (openFile) await this.openFileReplacingWebview(webview, file);
+      if (keepVideoAfterImport && prepared.videoUrl) await this.openVideo(prepared.videoUrl);
+      return { file, videoUrl: prepared.videoUrl, skipped: false };
+    } finally {
+      if (!keepVideoAfterImport) this.closeWebviewLeaves(prepared.temporaryVideoViews || []);
     }
-    let targetFolder = this.settings.notesFolder;
-    if (askFolder && this.settings.chooseFolderOnImport) {
-      const selected = await this.chooseImportFolder();
-      if (selected === null) throw new Error("\u5DF2\u53D6\u6D88\u5BFC\u5165");
-      targetFolder = selected;
-      this.settings.notesFolder = selected;
-      await this.saveSettings();
-    }
-    const markdown = await convertHtmlToMarkdown({
-      vault: this.app.vault,
-      html: snapshot.html,
-      noteTitle: snapshot.title,
-      attachmentsFolder: attachmentFolderForNoteFolder(targetFolder, this.settings.attachmentsSubfolder),
-      downloadImages: this.settings.downloadImages,
-      videoUrl
-    });
-    const path = await this.createNotePath(snapshot.title, targetFolder);
-    const content = this.composeNote(snapshot.title, snapshot.url, videoUrl, markdown);
-    const file = await this.app.vault.create(path, content);
-    await this.openFileReplacingWebview(webview, file);
-    if (keepVideoAfterImport) {
-      if (videoUrl) await this.openVideo(videoUrl);
-    } else {
-      this.closeWebviewLeaves(temporaryVideoViews);
-    }
-    return { file, videoUrl, skipped: false };
+  }
+  async importWebview(webview, notice, keepVideoAfterImport, askFolder = true) {
+    const prepared = await this.prepareWebviewImport(webview, notice, askFolder, keepVideoAfterImport);
+    return await this.commitPreparedWebviewImport(prepared, webview, keepVideoAfterImport, true);
   }
   async syncCurrentNote() {
     const file = this.getActiveManagedFile();

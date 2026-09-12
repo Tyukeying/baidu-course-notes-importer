@@ -390,6 +390,34 @@ test("FCB navigation only associates a video with its originating webview", () =
   assert.deepEqual(associations, [[fcbUrl, videoUrl]]);
 });
 
+test("legacy FCB import still prepares before committing", async () => {
+  const order = [];
+  const prepared = { skipped: true, file: { path: "notes/lesson.md" }, videoUrl: "", temporaryVideoViews: [] };
+  const instance = Object.create(plugin.default.prototype);
+  instance.prepareWebviewImport = async () => { order.push("prepare"); return prepared; };
+  instance.commitPreparedWebviewImport = async (value) => {
+    order.push("commit");
+    assert.equal(value, prepared);
+    return { file: prepared.file, videoUrl: "", skipped: true };
+  };
+  const result = await instance.importWebview({}, { setMessage() {} }, false, true);
+  assert.equal(result.skipped, true);
+  assert.deepEqual(order, ["prepare", "commit"]);
+});
+
+test("committing a previously imported FCB note preserves open behavior", async () => {
+  const file = { path: "notes/lesson.md" };
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const prepared = { skipped: true, file, videoUrl, temporaryVideoViews: [] };
+  const order = [];
+  const instance = Object.create(plugin.default.prototype);
+  instance.openFileReplacingWebview = async (_webview, target) => { order.push("open-note"); assert.equal(target, file); };
+  instance.openVideo = async (target) => { order.push("open-video"); assert.equal(target, videoUrl); };
+  const result = await instance.commitPreparedWebviewImport(prepared, {}, true, true);
+  assert.equal(result.skipped, true);
+  assert.deepEqual(order, ["open-note", "open-video"]);
+});
+
 let failures = 0;
 for (const { name, callback } of tests) {
   try {
