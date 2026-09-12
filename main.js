@@ -2802,12 +2802,8 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
     const notice = new import_obsidian4.Notice("\u6B63\u5728\u5BFC\u5165\u767E\u5EA6 FCB AI \u7B14\u8BB0\u548C\u5B57\u5E55\u2026", 0);
     try {
       this.updateImportDiagnostics({ stage: "import-fcb-note" });
-      const result = await this.importWebview(webview, notice, this.settings.openVideoAfterImport);
-      let subtitleResult = { source: "unavailable", cues: [] };
-      if (result.videoUrl) {
-        notice.setMessage("\u767E\u5EA6 AI \u7B14\u8BB0\u5DF2\u5BFC\u5165\uFF0C\u6B63\u5728\u8BFB\u53D6\u5BF9\u5E94\u89C6\u9891\u5B57\u5E55\u2026");
-        subtitleResult = await this.importOnlineSubtitlesForCurrentNote(result.file, result.videoUrl, notice, void 0, true);
-      }
+      const result = await this.importFcbWebviewWithSubtitles(webview, notice, this.settings.openVideoAfterImport, true);
+      const subtitleResult = result.subtitleResult;
       this.updateImportDiagnostics({
         status: "success",
         stage: "complete",
@@ -2955,9 +2951,11 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       }
       const fcbWebview = file ? null : findActiveFcbWebview(this.app);
       if (fcbWebview) {
-        const result = await this.importWebview(fcbWebview, notice, this.settings.openVideoAfterImport);
-        file = result.file;
-        videoUrl = result.videoUrl;
+        const combined = await this.importFcbWebviewWithSubtitles(fcbWebview, notice, this.settings.openVideoAfterImport, true);
+        this.updateImportDiagnostics({ status: "success", stage: "complete", subtitleSource: combined.subtitleResult.source, subtitleCueCount: combined.subtitleResult.cues.length, plainTextLength: String(combined.subtitleResult.plainText || "").length });
+        notice.hide();
+        new import_obsidian4.Notice(`\u7F51\u9875\u5BFC\u5165\u5B8C\u6210\uFF1A${combined.subtitleResult.cues.length} \u6761\u5B57\u5E55\uFF08${subtitleSourceLabel(combined.subtitleResult.source)}\uFF09`, 7e3);
+        return;
       } else if (file) {
         const frontmatter = this.app.metadataCache.getFileCache(file) == null ? void 0 : this.app.metadataCache.getFileCache(file).frontmatter;
         if (!videoUrl) videoUrl = typeof (frontmatter == null ? void 0 : frontmatter.video_url) === "string" ? frontmatter.video_url : "";
@@ -3330,24 +3328,34 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       throw error;
     }
   }
-  async commitPreparedWebviewImport(prepared, webview, keepVideoAfterImport, openFile = true) {
+  async convertPreparedFcbMarkdown(prepared) {
+    return await convertHtmlToMarkdown({
+      vault: this.app.vault,
+      html: prepared.snapshot.html,
+      noteTitle: prepared.snapshot.title,
+      attachmentsFolder: attachmentFolderForNoteFolder(prepared.targetFolder, this.settings.attachmentsSubfolder),
+      downloadImages: this.settings.downloadImages,
+      videoUrl: prepared.videoUrl
+    });
+  }
+  async commitPreparedWebviewImport(prepared, webview, keepVideoAfterImport, openFile = true, subtitleResult = null) {
     if (prepared.skipped) {
+      if (subtitleResult) await this.mergeOnlineSubtitlesIntoFile(prepared.file, prepared.videoUrl, subtitleResult);
       if (openFile) await this.openFileReplacingWebview(webview, prepared.file);
       if (keepVideoAfterImport && prepared.videoUrl) await this.openVideo(prepared.videoUrl);
       return { file: prepared.file, videoUrl: prepared.videoUrl, skipped: true };
     }
     try {
-      const markdown = await convertHtmlToMarkdown({
-        vault: this.app.vault,
-        html: prepared.snapshot.html,
-        noteTitle: prepared.snapshot.title,
-        attachmentsFolder: attachmentFolderForNoteFolder(prepared.targetFolder, this.settings.attachmentsSubfolder),
-        downloadImages: this.settings.downloadImages,
-        videoUrl: prepared.videoUrl
-      });
+      const markdown = await this.convertPreparedFcbMarkdown(prepared);
       const path = await this.createNotePath(prepared.snapshot.title, prepared.targetFolder);
-      const content = this.composeNote(prepared.snapshot.title, prepared.snapshot.url, prepared.videoUrl, markdown);
+      let content = this.composeNote(prepared.snapshot.title, prepared.snapshot.url, prepared.videoUrl, markdown);
+      let subtitleUpdate = null;
+      if (subtitleResult) {
+        subtitleUpdate = buildOnlineSubtitleUpdate(content, prepared.videoUrl, subtitleResult);
+        content = subtitleUpdate.content;
+      }
       const file = await this.app.vault.create(path, content);
+      if (subtitleUpdate && !subtitleUpdate.preserved) await this.updateOnlineSubtitleFrontmatter(file, prepared.videoUrl, subtitleResult, subtitleUpdate);
       if (openFile) await this.openFileReplacingWebview(webview, file);
       if (keepVideoAfterImport && prepared.videoUrl) await this.openVideo(prepared.videoUrl);
       return { file, videoUrl: prepared.videoUrl, skipped: false };
@@ -3358,6 +3366,26 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
   async importWebview(webview, notice, keepVideoAfterImport, askFolder = true) {
     const prepared = await this.prepareWebviewImport(webview, notice, askFolder, keepVideoAfterImport);
     return await this.commitPreparedWebviewImport(prepared, webview, keepVideoAfterImport, true);
+  }
+  async importFcbWebviewWithSubtitles(webview, notice, keepVideoAfterImport, askFolder = true) {
+    let prepared = null;
+    let handedToCommit = false;
+    try {
+      this.updateImportDiagnostics({ stage: "prepare-fcb-note" });
+      prepared = await this.prepareWebviewImport(webview, notice, askFolder, keepVideoAfterImport);
+      if (!isVideoUrl(prepared.videoUrl || "")) throw new Error("\u672A\u80FD\u7CBE\u786E\u8BC6\u522B FCB \u7B14\u8BB0\u5BF9\u5E94\u7684\u767E\u5EA6\u5927\u89C6\u9891\uFF0C\u5DF2\u505C\u6B62\u5BFC\u5165\u4EE5\u907F\u514D\u5173\u8054\u9519\u8BEF\u3002");
+      notice.setMessage("\u5DF2\u8BFB\u53D6 FCB AI \u7B14\u8BB0\uFF0C\u6B63\u5728\u9A8C\u8BC1\u5BF9\u5E94\u89C6\u9891\u7684\u5B8C\u6574\u5B57\u5E55\u2026");
+      this.updateImportDiagnostics({ stage: "subtitle-extraction" });
+      const preferredVideoWebview = findVideoWebview(prepared.videoUrl);
+      const subtitleResult = await this.collectOnlineSubtitles(prepared.videoUrl, notice, preferredVideoWebview, false);
+      this.updateImportDiagnostics({ stage: "commit-fcb-note" });
+      handedToCommit = true;
+      const result = await this.commitPreparedWebviewImport(prepared, webview, keepVideoAfterImport, true, subtitleResult);
+      return { ...result, subtitleResult };
+    } catch (error) {
+      if (prepared && !handedToCommit && !keepVideoAfterImport) this.closeWebviewLeaves(prepared.temporaryVideoViews || []);
+      throw error;
+    }
   }
   async syncCurrentNote() {
     const file = this.getActiveManagedFile();

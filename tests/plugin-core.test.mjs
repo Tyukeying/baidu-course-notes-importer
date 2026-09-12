@@ -442,6 +442,68 @@ test("committing a previously imported FCB note preserves open behavior", async 
   assert.deepEqual(order, ["open-note", "open-video"]);
 });
 
+test("FCB combined import collects subtitles before handing the note to commit", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const prepared = { skipped: false, videoUrl, temporaryVideoViews: [], snapshot: { title: "lesson", url: "https://pan.baidu.com/fcb/edit?fsid=123", html: "<p>AI note</p>" }, targetFolder: "notes" };
+  const subtitles = { source: "network-json", cues: Array.from({ length: 5 }, (_, start) => ({ start, end: start + 1, text: `cue ${start}` })), plainText: "" };
+  const order = [];
+  const instance = Object.create(plugin.default.prototype);
+  instance.lastImportDiagnostics = null;
+  instance.prepareWebviewImport = async () => { order.push("prepare"); return prepared; };
+  instance.collectOnlineSubtitles = async (url) => { order.push("collect"); assert.equal(url, videoUrl); return subtitles; };
+  instance.commitPreparedWebviewImport = async (value, _webview, _keep, _open, result) => {
+    order.push("commit");
+    assert.equal(value, prepared);
+    assert.equal(result, subtitles);
+    return { file: { path: "notes/lesson.md" }, videoUrl, skipped: false };
+  };
+  const result = await instance.importFcbWebviewWithSubtitles({}, { setMessage() {} }, false, true);
+  assert.equal(result.subtitleResult, subtitles);
+  assert.deepEqual(order, ["prepare", "collect", "commit"]);
+});
+
+test("FCB combined import never commits when subtitle collection fails", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const temporaryVideo = {};
+  const prepared = { skipped: false, videoUrl, temporaryVideoViews: [temporaryVideo], snapshot: { title: "lesson", url: "https://pan.baidu.com/fcb/edit?fsid=123", html: "<p>AI note</p>" }, targetFolder: "notes" };
+  const instance = Object.create(plugin.default.prototype);
+  instance.lastImportDiagnostics = null;
+  instance.prepareWebviewImport = async () => prepared;
+  instance.collectOnlineSubtitles = async () => { throw new Error("subtitle unavailable"); };
+  let commits = 0;
+  let cleanup = 0;
+  instance.commitPreparedWebviewImport = async () => { commits += 1; };
+  instance.closeWebviewLeaves = (views) => { cleanup += 1; assert.deepEqual(views, [temporaryVideo]); };
+  await assert.rejects(instance.importFcbWebviewWithSubtitles({}, { setMessage() {} }, false, true), /subtitle unavailable/);
+  assert.equal(commits, 0);
+  assert.equal(cleanup, 1);
+});
+
+test("new FCB note is created once with AI note and subtitles already combined", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const prepared = { skipped: false, videoUrl, temporaryVideoViews: [], snapshot: { title: "lesson", url: "https://pan.baidu.com/fcb/edit?fsid=123", html: "<p>AI note</p>" }, targetFolder: "notes" };
+  const subtitles = { source: "network-json", cues: Array.from({ length: 5 }, (_, start) => ({ start, end: start + 1, text: `cue ${start}` })), plainText: "" };
+  const file = { path: "notes/lesson.md" };
+  let creates = 0;
+  let createdContent = "";
+  let frontmatterUpdates = 0;
+  const instance = Object.create(plugin.default.prototype);
+  instance.settings = { attachmentsSubfolder: "attachments", downloadImages: true };
+  instance.app = { vault: { create: async (_path, content) => { creates += 1; createdContent = content; return file; } } };
+  instance.convertPreparedFcbMarkdown = async () => "AI note";
+  instance.createNotePath = async () => file.path;
+  instance.composeNote = () => "# lesson\n\n<!-- BAIDU_AI_NOTE_START -->\nAI note\n<!-- BAIDU_AI_NOTE_END -->\n";
+  instance.updateOnlineSubtitleFrontmatter = async () => { frontmatterUpdates += 1; };
+  instance.openFileReplacingWebview = async () => {};
+  instance.closeWebviewLeaves = () => {};
+  const result = await instance.commitPreparedWebviewImport(prepared, {}, false, true, subtitles);
+  assert.equal(result.file, file);
+  assert.equal(creates, 1);
+  assert.equal(frontmatterUpdates, 1);
+  assert.ok(createdContent.indexOf("BAIDU_AI_SUBTITLE_START") < createdContent.indexOf("BAIDU_AI_NOTE_START"));
+  assert.equal((createdContent.match(/BAIDU_AI_SUBTITLE_START/g) || []).length, 1);
+});
+
 let failures = 0;
 for (const { name, callback } of tests) {
   try {
