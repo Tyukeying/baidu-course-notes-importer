@@ -1273,8 +1273,31 @@ function extractVisibleMediaExtendedTranscript() {
   }
   return normalizeOnlineCues(cues);
 }
+function selectSubtitleResourceUrls(entries) {
+  const explicit = [];
+  const fallback = [];
+  const allowedHost = (hostname) => hostname === "baidu.com" || hostname.endsWith(".baidu.com") || hostname === "bcebos.com" || hostname.endsWith(".bcebos.com") || hostname === "baidubce.com" || hostname.endsWith(".baidubce.com") || hostname === "bdstatic.com" || hostname.endsWith(".bdstatic.com") || hostname === "baidupcs.com" || hostname.endsWith(".baidupcs.com");
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const value = String(entry && entry.name || "");
+    let url;
+    try {
+      url = new URL(value);
+    } catch (e) {
+      continue;
+    }
+    if (!/^https?:$/.test(url.protocol) || !allowedHost(url.hostname.toLowerCase())) continue;
+    if (/\.(?:mp4|m4s|m3u8|ts|flv|mp3|aac|jpg|jpeg|png|gif|webp|woff2?|css|js)(?:\?|$)/i.test(value)) continue;
+    if (/subtitle|caption|transcript|\.srt(?:\?|$)|\.vtt(?:\?|$)|speech|audio.?text|ai.?text|(?:fsid=.*fn=|fn=.*fsid=)/i.test(value)) {
+      explicit.push(value);
+    } else if (/^(fetch|xmlhttprequest)$/i.test(String(entry && entry.initiatorType || ""))) {
+      fallback.push(value);
+    }
+  }
+  return Array.from(new Set([...explicit.slice(-24), ...fallback.slice(-8)]));
+}
 async function extractOnlineSubtitles(webview) {
   const code = String.raw`(async () => {
+    const selectSubtitleResourceUrls = ${selectSubtitleResourceUrls.toString()};
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     const clean = value => String(value == null ? '' : value)
       .replace(/<br\s*\/?\s*>/gi, ' ')
@@ -1554,11 +1577,7 @@ async function extractOnlineSubtitles(webview) {
         if (perf) resourceEntries.push(...perf.getEntriesByType('resource'));
       } catch (_) {}
     }
-    const resourceUrls = Array.from(new Set(resourceEntries.filter(entry => {
-      const url = entry.name || '';
-      if (!/^https?:/i.test(url) || /\.(?:mp4|m4s|m3u8|ts|flv|mp3|aac|jpg|jpeg|png|gif|webp|woff2?|css|js)(?:\?|$)/i.test(url)) return false;
-      return /subtitle|caption|transcript|\.srt(?:\?|$)|\.vtt(?:\?|$)|speech|audio.?text|ai.?text|(?:fsid=.*fn=|fn=.*fsid=)/i.test(url) || /^(fetch|xmlhttprequest)$/i.test(entry.initiatorType || '');
-    }).map(entry => entry.name))).slice(-60);
+    const resourceUrls = selectSubtitleResourceUrls(resourceEntries);
     for (const url of resourceUrls) {
       try {
         const response = await fetch(url, { credentials: 'include' });

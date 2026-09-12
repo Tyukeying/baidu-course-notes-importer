@@ -67,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, sameVideo, getQueryPath, redactDiagnosticText, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, sameVideo, getQueryPath, redactDiagnosticText, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -199,6 +199,22 @@ test("online cues are sorted, cleaned and deduplicated", () => {
     { start: 2, text: "first" },
     { start: 8, text: "second" }
   ]);
+});
+
+test("subtitle resource selection prefers bounded Baidu candidates", () => {
+  const entries = [
+    { name: "https://evil.example/subtitle.vtt", initiatorType: "fetch" },
+    { name: "https://pan.baidu.com/api/video/list", initiatorType: "fetch" },
+    { name: "https://bj.bcebos.com/course/subtitle.vtt?token=x", initiatorType: "fetch" },
+    { name: "https://pan.baidu.com/static/player.js", initiatorType: "script" },
+    ...Array.from({ length: 12 }, (_, index) => ({ name: `https://pan.baidu.com/api/request-${index}`, initiatorType: "xmlhttprequest" }))
+  ];
+  const urls = core.selectSubtitleResourceUrls(entries);
+  assert.equal(urls[0], "https://bj.bcebos.com/course/subtitle.vtt?token=x");
+  assert.equal(urls.length, 9);
+  assert.ok(urls.includes("https://pan.baidu.com/api/request-11"));
+  assert.ok(!urls.includes("https://pan.baidu.com/api/request-0"));
+  assert.ok(urls.every((url) => !url.includes("evil.example") && !url.endsWith("player.js")));
 });
 
 test("a single trusted cue is not accepted as a complete transcript", () => {
