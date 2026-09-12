@@ -43,7 +43,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, managedSection, replaceOrInsertManagedSection, sameVideo, getQueryPath };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, managedSection, replaceOrInsertManagedSection, sameVideo, getQueryPath };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -89,6 +89,11 @@ test("online cues are sorted, cleaned and deduplicated", () => {
     { start: 2, text: "first" },
     { start: 8, text: "second" }
   ]);
+});
+
+test("a single trusted cue is not accepted as a complete transcript", () => {
+  assert.equal(core.hasCompleteTimedSubtitles({ source: "network-json", cues: [{ start: 0, text: "partial" }] }), false);
+  assert.equal(core.hasCompleteTimedSubtitles({ source: "network-json", cues: Array.from({ length: 5 }, (_, start) => ({ start, text: String(start) })) }), true);
 });
 
 test("managed section replacement preserves text outside plugin markers", () => {

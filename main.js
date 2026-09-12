@@ -1207,6 +1207,9 @@ function normalizeOnlineCues(rawCues) {
   }
   return result;
 }
+function hasCompleteTimedSubtitles(result) {
+  return Array.isArray(result == null ? void 0 : result.cues) && result.cues.length >= 5;
+}
 function subtitleSourceLabel(source) {
   const labels = {
     "player-text-track": "\u64AD\u653E\u5668\u5B57\u5E55\u8F68\u9053",
@@ -2863,19 +2866,17 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         for (const candidateWebview of videoWebviews) {
           try {
             const extracted = await extractOnlineSubtitles(candidateWebview);
-            const extractedComplete = extracted.cues.length >= 5 ? 1 : 0;
-            const bestComplete = best.cues.length >= 5 ? 1 : 0;
+            const extractedComplete = hasCompleteTimedSubtitles(extracted) ? 1 : 0;
+            const bestComplete = hasCompleteTimedSubtitles(best) ? 1 : 0;
             if (extractedComplete > bestComplete || extractedComplete === bestComplete && sourcePriority(extracted.source) > sourcePriority(best.source) || extractedComplete === bestComplete && sourcePriority(extracted.source) === sourcePriority(best.source) && (extracted.cues.length > best.cues.length || extracted.cues.length === best.cues.length && String(extracted.plainText || "").length > String(best.plainText || "").length)) best = extracted;
           } catch (extractError) {
             console.debug("Baidu Course Notes Importer: subtitle extraction attempt failed", safeWebviewUrl(candidateWebview), extractError);
           }
         }
-        const trustedCompleteSource = ["player-text-track", "network-timed-text", "network-json", "media-extended-transcript"].includes(best.source);
-        if (best.cues.length >= 5 || trustedCompleteSource && best.cues.length > 0) break;
+        if (hasCompleteTimedSubtitles(best)) break;
         await delay(900 + attempt * 500);
       }
-      const completeSource = ["player-text-track", "network-timed-text", "network-json", "media-extended-transcript"].includes(best.source);
-      if (!best.plainText && (best.cues.length === 0 || !completeSource && best.cues.length < 5)) {
+      if (!hasCompleteTimedSubtitles(best) && !best.plainText) {
         if (allowMissing) {
           closeTemporaryVideo();
           await this.openFileInNewTab(targetFile);
@@ -2883,6 +2884,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         }
         throw new Error("\u672A\u627E\u5230\u5B8C\u6574\u5B57\u5E55\u3002\u8BF7\u5728\u767E\u5EA6\u5927\u89C6\u9891\u9875\u5F00\u542F AI \u5B57\u5E55\uFF0C\u64AD\u653E 3\u20135 \u79D2\uFF1B\u5982 Media Extended \u663E\u793A\u201C\u6253\u5F00\u8F6C\u5F55\u6587\u7A3F\u201D\uFF0C\u4E5F\u53EF\u5148\u6253\u5F00\u540E\u91CD\u8BD5\u3002");
       }
+      if (!hasCompleteTimedSubtitles(best)) best.cues = [];
       best.cues = normalizeOnlineCues(best.cues);
       await this.mergeOnlineSubtitlesIntoFile(targetFile, targetVideoUrl, best);
       closeTemporaryVideo();
