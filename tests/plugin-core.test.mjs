@@ -67,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, managedSection, replaceOrInsertManagedSection, sameVideo, getQueryPath, redactDiagnosticText, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, sameVideo, getQueryPath, redactDiagnosticText, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -212,6 +212,30 @@ test("managed section replacement preserves text outside plugin markers", () => 
   assert.equal(core.managedSection(updated, start, end), replacement);
   assert.match(updated, /user before/);
   assert.match(updated, /user after/);
+});
+
+test("subtitle content transformation inserts one timestamped section before the AI note", () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const original = "# lesson\n\nuser text\n\n<!-- BAIDU_AI_NOTE_START -->\nAI note\n<!-- BAIDU_AI_NOTE_END -->\n";
+  const result = {
+    source: "network-json",
+    cues: Array.from({ length: 5 }, (_, start) => ({ start, end: start + 1, text: `cue ${start}` })),
+    plainText: ""
+  };
+  const first = core.buildOnlineSubtitleUpdate(original, videoUrl, result, "2026-09-12T00:00:00.000Z");
+  const second = core.buildOnlineSubtitleUpdate(first.content, videoUrl, result, "2026-09-12T00:01:00.000Z");
+  assert.equal(first.preserved, false);
+  assert.ok(first.content.indexOf("BAIDU_AI_SUBTITLE_START") < first.content.indexOf("BAIDU_AI_NOTE_START"));
+  assert.equal((second.content.match(/BAIDU_AI_SUBTITLE_START/g) || []).length, 1);
+  assert.match(second.content, /#t=00:00/);
+  assert.match(second.content, /user text/);
+});
+
+test("plain transcript never replaces an existing timestamped section", () => {
+  const existing = "# lesson\n\n<!-- BAIDU_AI_SUBTITLE_START -->\n- [00:00](https://pan.baidu.com/pfile/video?path=x#t=00:00) cue\n<!-- BAIDU_AI_SUBTITLE_END -->\n";
+  const update = core.buildOnlineSubtitleUpdate(existing, "https://pan.baidu.com/pfile/video?path=x", { source: "page", cues: [], plainText: "plain only" }, "2026-09-12T00:00:00.000Z");
+  assert.equal(update.preserved, true);
+  assert.equal(update.content, existing);
 });
 
 test("video identity uses Baidu path instead of expiring query parameters", () => {

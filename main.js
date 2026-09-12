@@ -2580,6 +2580,31 @@ var START_MARKER = "<!-- BAIDU_AI_NOTE_START -->";
 var END_MARKER = "<!-- BAIDU_AI_NOTE_END -->";
 var SUBTITLE_START_MARKER = "<!-- BAIDU_AI_SUBTITLE_START -->";
 var SUBTITLE_END_MARKER = "<!-- BAIDU_AI_SUBTITLE_END -->";
+function buildOnlineSubtitleUpdate(content, videoUrl, result, importedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  const cues = normalizeOnlineCues(result.cues);
+  const plainText = String(result.plainText || "").trim();
+  const oldSubtitleSection = managedSection(content, SUBTITLE_START_MARKER, SUBTITLE_END_MARKER);
+  if (!cues.length && plainText && /#t=\d{2}:\d{2}/.test(oldSubtitleSection)) return { content, cues, plainText, importedAt, preserved: true };
+  const lines = [
+    cues.length ? "## \u5B8C\u6574\u65F6\u95F4\u6233\u5B57\u5E55" : "## \u767E\u5EA6\u7F51\u9875\u6587\u7A3F",
+    "",
+    `> \u5B57\u5E55\u6765\u6E90\uFF1A${subtitleSourceLabel(result.source)}\uFF1B\u66F4\u65B0\u65F6\u95F4\uFF1A${new Date(importedAt).toLocaleString()}`,
+    ""
+  ];
+  for (const cue of cues) {
+    const label = formatTime(cue.start);
+    lines.push(`- [${label}](${videoTimestampUrl(videoUrl, cue.start)}) ${cue.text}`);
+  }
+  if (!cues.length && plainText) lines.push(...plainText.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean).flatMap((paragraph) => [paragraph, ""]));
+  const replacement = `${SUBTITLE_START_MARKER}\n${lines.join("\n")}\n${SUBTITLE_END_MARKER}`;
+  let baseContent = content;
+  const subtitleStart = baseContent.indexOf(SUBTITLE_START_MARKER);
+  const subtitleEnd = baseContent.indexOf(SUBTITLE_END_MARKER, subtitleStart + SUBTITLE_START_MARKER.length);
+  if (subtitleStart >= 0 && subtitleEnd >= 0) baseContent = `${baseContent.slice(0, subtitleStart)}${baseContent.slice(subtitleEnd + SUBTITLE_END_MARKER.length)}`;
+  const noteStart = baseContent.indexOf(START_MARKER);
+  const updatedContent = noteStart >= 0 ? `${baseContent.slice(0, noteStart).replace(/\s+$/, "")}\n\n${replacement}\n\n${baseContent.slice(noteStart).replace(/^\s+/, "")}` : `${baseContent.replace(/\s+$/, "")}\n\n${replacement}\n`;
+  return { content: updatedContent, cues, plainText, importedAt, preserved: false };
+}
 var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
@@ -3085,32 +3110,14 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
     }
   }
   async mergeOnlineSubtitlesIntoFile(file, videoUrl, result) {
-    const cues = normalizeOnlineCues(result.cues);
-    const plainText = String(result.plainText || "").trim();
     const oldContent = await this.app.vault.read(file);
-    const oldSubtitleSection = managedSection(oldContent, SUBTITLE_START_MARKER, SUBTITLE_END_MARKER);
-    if (!cues.length && plainText && /#t=\d{2}:\d{2}/.test(oldSubtitleSection)) return;
-    const lines = [
-      cues.length ? "## \u5B8C\u6574\u65F6\u95F4\u6233\u5B57\u5E55" : "## \u767E\u5EA6\u7F51\u9875\u6587\u7A3F",
-      "",
-      `> \u5B57\u5E55\u6765\u6E90\uFF1A${subtitleSourceLabel(result.source)}\uFF1B\u66F4\u65B0\u65F6\u95F4\uFF1A${(/* @__PURE__ */ new Date()).toLocaleString()}`,
-      ""
-    ];
-    for (const cue of cues) {
-      const label = formatTime(cue.start);
-      lines.push(`- [${label}](${videoTimestampUrl(videoUrl, cue.start)}) ${cue.text}`);
-    }
-    if (!cues.length && plainText) lines.push(...plainText.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean).flatMap((paragraph) => [paragraph, ""]));
-    const replacement = `${SUBTITLE_START_MARKER}\n${lines.join("\n")}\n${SUBTITLE_END_MARKER}`;
-    let baseContent = oldContent;
-    const subtitleStart = baseContent.indexOf(SUBTITLE_START_MARKER);
-    const subtitleEnd = baseContent.indexOf(SUBTITLE_END_MARKER, subtitleStart + SUBTITLE_START_MARKER.length);
-    if (subtitleStart >= 0 && subtitleEnd >= 0) {
-      baseContent = `${baseContent.slice(0, subtitleStart)}${baseContent.slice(subtitleEnd + SUBTITLE_END_MARKER.length)}`;
-    }
-    const noteStart = baseContent.indexOf(START_MARKER);
-    const newContent = noteStart >= 0 ? `${baseContent.slice(0, noteStart).replace(/\s+$/, "")}\n\n${replacement}\n\n${baseContent.slice(noteStart).replace(/^\s+/, "")}` : `${baseContent.replace(/\s+$/, "")}\n\n${replacement}\n`;
-    await this.app.vault.modify(file, newContent);
+    const update = buildOnlineSubtitleUpdate(oldContent, videoUrl, result);
+    if (update.preserved) return;
+    await this.app.vault.modify(file, update.content);
+    await this.updateOnlineSubtitleFrontmatter(file, videoUrl, result, update);
+  }
+  async updateOnlineSubtitleFrontmatter(file, videoUrl, result, update) {
+    const cues = update.cues;
     await this.app.fileManager.processFrontMatter(file, (fm) => {
       fm.video_url = videoUrl;
       fm.video_path = getQueryPath(videoUrl);
@@ -3118,7 +3125,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       fm.subtitle_cues = cues.length;
       fm.subtitle_format = cues.length ? "timestamped" : "plain-transcript";
       fm.subtitle_duration = Math.round(cues.reduce((max, cue) => Math.max(max, cue.end || cue.start), 0) * 1e3) / 1e3;
-      fm.subtitle_imported_at = (/* @__PURE__ */ new Date()).toISOString();
+      fm.subtitle_imported_at = update.importedAt;
     });
   }
   async importAllOpenNotes() {
