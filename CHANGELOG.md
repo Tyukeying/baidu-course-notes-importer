@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.5
+
+- Add repeatable release, syntax, bundle-load, and core behavior checks before deployment.
+- Reject one-off partial cues instead of treating a single trusted cue as a complete timestamped transcript.
+- Collect and validate video-page subtitles before creating or updating the AI note, so a subtitle failure leaves the Vault note untouched.
+- Preserve an existing note unchanged when the optional subtitle fallback cannot find a complete transcript.
+
 ## 0.5.4
 
 - Keep waiting for timestamped subtitle resources during the first combined import instead of stopping when unrelated plain text appears.

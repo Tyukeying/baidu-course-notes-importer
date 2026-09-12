@@ -1,6 +1,6 @@
 {
   "name": "baidu-course-notes-importer",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "private": true,
   "description": "Verification harness for the Baidu Course Notes Importer release bundle.",
   "scripts": {
