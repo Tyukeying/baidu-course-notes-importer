@@ -2074,8 +2074,6 @@ var DEFAULT_SETTINGS = {
 
 // Baidu Netdisk Web Viewer integration.
 var import_obsidian3 = require("obsidian");
-var FCB_URL_PART = "pan.baidu.com/fcb/edit";
-var VIDEO_URL_PART = "pan.baidu.com/pfile/video";
 function getWebviews() {
   return Array.from(document.querySelectorAll("webview"));
 }
@@ -2087,7 +2085,7 @@ function safeWebviewUrl(webview) {
   }
 }
 function findFcbWebview(url) {
-  const candidates = getWebviews().filter((view) => safeWebviewUrl(view).includes(FCB_URL_PART));
+  const candidates = getWebviews().filter((view) => isFcbUrl(safeWebviewUrl(view)));
   if (!url) return candidates[0];
   return candidates.find((view) => samePage(safeWebviewUrl(view), url));
 }
@@ -2129,7 +2127,7 @@ function findVideoWebview(videoUrl) {
   return findVideoWebviews(videoUrl)[0];
 }
 function findVideoWebviews(videoUrl) {
-  const candidates = getWebviews().filter((view) => safeWebviewUrl(view).includes(VIDEO_URL_PART));
+  const candidates = getWebviews().filter((view) => isVideoUrl(safeWebviewUrl(view)));
   if (!videoUrl) return candidates;
   const exact = candidates.filter((view) => samePage(safeWebviewUrl(view), videoUrl));
   if (exact.length > 0) return exact;
@@ -2540,11 +2538,19 @@ async function openInWebViewer(app, url, position) {
     throw error;
   }
 }
+function isBaiduPageUrl(value, pathPrefix) {
+  try {
+    const url = new URL(String(value || ""));
+    return /^https?:$/.test(url.protocol) && url.hostname.toLowerCase() === "pan.baidu.com" && (url.pathname === pathPrefix || url.pathname.startsWith(`${pathPrefix}/`));
+  } catch (e) {
+    return false;
+  }
+}
 function isVideoUrl(url) {
-  return url.includes(VIDEO_URL_PART) && !url.startsWith("blob:");
+  return isBaiduPageUrl(url, "/pfile/video");
 }
 function isFcbUrl(url) {
-  return url.includes(FCB_URL_PART);
+  return isBaiduPageUrl(url, "/fcb/edit");
 }
 function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));

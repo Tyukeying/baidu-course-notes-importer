@@ -67,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, sameVideo, getQueryPath, redactDiagnosticText, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -262,6 +262,14 @@ test("video identity uses Baidu path instead of expiring query parameters", () =
   const right = "https://pan.baidu.com/pfile/video?token=two&path=%2Fcourse%2Flesson.mp4";
   assert.equal(core.getQueryPath(left), "/course/lesson.mp4");
   assert.equal(core.sameVideo(left, right), true);
+});
+
+test("Baidu page recognition rejects lookalike hosts and embedded URL text", () => {
+  assert.equal(core.isVideoUrl("https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4"), true);
+  assert.equal(core.isFcbUrl("https://pan.baidu.com/fcb/edit?fsid=123"), true);
+  assert.equal(core.isVideoUrl("https://evil.example/?next=https://pan.baidu.com/pfile/video"), false);
+  assert.equal(core.isVideoUrl("https://pan.baidu.com.evil.example/pfile/video"), false);
+  assert.equal(core.isFcbUrl("javascript:pan.baidu.com/fcb/edit"), false);
 });
 
 test("video import collects subtitles before scanning or writing Vault notes", async () => {
