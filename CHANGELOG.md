@@ -18,6 +18,7 @@
 - Track auto-opened videos by WebView instance, clear stale FCB navigation context, and reuse mappings by stable FCB identity after login parameters change.
 - Validate image response status, MIME type and size before writing an attachment, so expired links cannot save an HTML error page as an image.
 - Redact URLs and session credentials from console errors and user-facing failure messages as well as copied diagnostics.
+- Read AI-note content across the main document, accessible frames and shadow roots with bounded retries before opening the transcript tab; stop before switching when no note exists, and restore the AI-note tab after subtitle extraction.
 
 ## 0.5.5
 
