@@ -2071,6 +2071,28 @@ var DEFAULT_SETTINGS = {
   lastCourseFolder: "",
   videoByFcbUrl: {}
 };
+function normalizePluginSettings(value) {
+  const loaded = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const stringValue = (key) => typeof loaded[key] === "string" ? loaded[key].trim() : DEFAULT_SETTINGS[key];
+  const booleanValue = (key) => typeof loaded[key] === "boolean" ? loaded[key] : DEFAULT_SETTINGS[key];
+  const rawMappings = loaded.videoByFcbUrl && typeof loaded.videoByFcbUrl === "object" && !Array.isArray(loaded.videoByFcbUrl) ? loaded.videoByFcbUrl : {};
+  const validMappings = Object.entries(rawMappings).filter(([fcbUrl, videoUrl]) => isFcbUrl(fcbUrl) && typeof videoUrl === "string" && isVideoUrl(videoUrl)).slice(-200);
+  const settings = {
+    notesFolder: stringValue("notesFolder"),
+    attachmentsFolder: stringValue("attachmentsFolder"),
+    attachmentsSubfolder: stringValue("attachmentsSubfolder"),
+    chooseFolderOnImport: booleanValue("chooseFolderOnImport"),
+    openVideoAfterImport: booleanValue("openVideoAfterImport"),
+    videoOpenPosition: ["right", "main"].includes(loaded.videoOpenPosition) ? loaded.videoOpenPosition : DEFAULT_SETTINGS.videoOpenPosition,
+    downloadImages: booleanValue("downloadImages"),
+    syncMode: ["incremental", "replace"].includes(loaded.syncMode) ? loaded.syncMode : DEFAULT_SETTINGS.syncMode,
+    subtitleCacheFolder: stringValue("subtitleCacheFolder"),
+    lastCourseFolder: stringValue("lastCourseFolder"),
+    videoByFcbUrl: Object.fromEntries(validMappings)
+  };
+  const effectiveLoaded = Object.fromEntries(Object.keys(DEFAULT_SETTINGS).map((key) => [key, loaded[key] === void 0 ? DEFAULT_SETTINGS[key] : loaded[key]]));
+  return { settings, changed: JSON.stringify(settings) !== JSON.stringify(effectiveLoaded) };
+}
 
 // Baidu Netdisk Web Viewer integration.
 var import_obsidian3 = require("obsidian");
@@ -2740,12 +2762,11 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
     (_a = this.webviewObserver) == null ? void 0 : _a.disconnect();
   }
   async loadSettings() {
-    var _a;
     const loaded = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded != null ? loaded : {});
-    this.settings.videoByFcbUrl = (_a = loaded == null ? void 0 : loaded.videoByFcbUrl) != null ? _a : {};
+    const normalized = normalizePluginSettings(loaded);
+    this.settings = normalized.settings;
     // Migrate only historical defaults; keep custom folders and existing files.
-    let migrated = false;
+    let migrated = normalized.changed;
     if (["Baidu AI Notes", "Netdisk AI Notes Importer"].includes(loaded == null ? void 0 : loaded.notesFolder)) {
       this.settings.notesFolder = DEFAULT_SETTINGS.notesFolder;
       migrated = true;

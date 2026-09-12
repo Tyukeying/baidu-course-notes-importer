@@ -67,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -185,6 +185,35 @@ test("diagnostic reports keep useful counts and redact URLs and credentials", ()
 test("attachment folder stays beside the selected note folder", () => {
   assert.equal(core.attachmentFolderForNoteFolder("数学/零基础", "附件"), "数学/零基础/附件");
   assert.equal(core.attachmentFolderForNoteFolder("", "附件"), "附件");
+});
+
+test("settings normalization repairs invalid cross-device data and removes unsafe mappings", () => {
+  const validFcb = "https://pan.baidu.com/fcb/edit?fsid=123";
+  const validVideo = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const normalized = core.normalizePluginSettings({
+    notesFolder: "  Math  ",
+    attachmentsSubfolder: 42,
+    chooseFolderOnImport: "yes",
+    openVideoAfterImport: false,
+    videoOpenPosition: "floating",
+    downloadImages: true,
+    syncMode: "merge-everything",
+    subtitleCacheFolder: "  C:\\Baidu\\Cache_Data  ",
+    videoByFcbUrl: {
+      [validFcb]: validVideo,
+      "https://evil.example/fcb/edit": validVideo,
+      "https://pan.baidu.com/fcb/edit?fsid=bad": "https://evil.example/pfile/video"
+    }
+  });
+  assert.equal(normalized.changed, true);
+  assert.equal(normalized.settings.notesFolder, "Math");
+  assert.equal(normalized.settings.attachmentsSubfolder, "\u9644\u4EF6");
+  assert.equal(normalized.settings.chooseFolderOnImport, true);
+  assert.equal(normalized.settings.openVideoAfterImport, false);
+  assert.equal(normalized.settings.videoOpenPosition, "right");
+  assert.equal(normalized.settings.syncMode, "incremental");
+  assert.equal(normalized.settings.subtitleCacheFolder, "C:\\Baidu\\Cache_Data");
+  assert.deepEqual(normalized.settings.videoByFcbUrl, { [validFcb]: validVideo });
 });
 
 test("online cues are sorted, cleaned and deduplicated", () => {
