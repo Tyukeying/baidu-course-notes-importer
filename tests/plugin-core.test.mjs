@@ -234,6 +234,69 @@ test("optional subtitle fallback leaves the existing note unchanged", async () =
   assert.equal(opens, 1);
 });
 
+test("successful video import commits subtitles once and opens the note after commit", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const webview = {
+    getURL: () => videoUrl,
+    executeJavaScript: async () => ({
+      url: videoUrl,
+      title: "lesson",
+      html: "<p>AI note</p>",
+      text: "AI note",
+      noteSource: "ai-note-tab-panel",
+      fcbUrl: ""
+    })
+  };
+  const file = { path: "notes/lesson.md", parent: { path: "notes" } };
+  const transcript = {
+    source: "network-json",
+    cues: Array.from({ length: 5 }, (_, start) => ({ start, end: start + 1, text: `cue ${start}` })),
+    plainText: ""
+  };
+  const order = [];
+  const instance = Object.create(plugin.default.prototype);
+  instance.settings = {
+    videoByFcbUrl: {},
+    notesFolder: "notes",
+    attachmentsSubfolder: "attachments",
+    chooseFolderOnImport: false,
+    downloadImages: true
+  };
+  instance.app = {
+    workspace: {
+      activeLeaf: { view: { containerEl: { querySelectorAll: () => [webview] } } },
+      getMostRecentLeaf: () => null
+    },
+    metadataCache: {
+      getFileCache: () => ({ frontmatter: { source: "baidu-ai-note", video_url: videoUrl } })
+    }
+  };
+  instance.collectOnlineSubtitles = async () => {
+    order.push("collect");
+    return transcript;
+  };
+  instance.findManagedFilesByVideoUrl = async () => {
+    order.push("find");
+    return [{ file }];
+  };
+  instance.consolidateManagedVideoFiles = async () => {
+    order.push("consolidate");
+    return file;
+  };
+  instance.mergeOnlineSubtitlesIntoFile = async (target, url, result) => {
+    order.push("merge");
+    assert.equal(target, file);
+    assert.equal(url, videoUrl);
+    assert.equal(result, transcript);
+  };
+  instance.openFileInNewTab = async (target) => {
+    order.push("open");
+    assert.equal(target, file);
+  };
+  await instance.importCurrentNoteAndSubtitles();
+  assert.deepEqual(order, ["collect", "find", "consolidate", "merge", "open"]);
+});
+
 let failures = 0;
 for (const { name, callback } of tests) {
   try {
