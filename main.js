@@ -1352,6 +1352,9 @@ async function extractOnlineSubtitles(webview) {
       cues.sort((a, b) => a.start - b.start || a.end - b.end);
       if (cues.length) candidates.push({ source, cues });
     };
+    const noteTabBeforeTranscript = Array.from(new Set(Array.from(document.querySelectorAll('button, [role="tab"], [role="button"], a, span'))
+      .filter(el => visible(el) && /^(?:AI\s*\u7B14\u8BB0|\u7B14\u8BB0|\u667A\u80FD\u7B14\u8BB0|\u89C6\u9891\u7B14\u8BB0|\u8BFE\u7A0B\u7B14\u8BB0)$/.test(clean(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title'))))
+      .map(el => el.closest('button, [role="tab"], [role="button"], a') || el)))[0] || null;
     const transcriptTab = Array.from(new Set(Array.from(document.querySelectorAll('button, [role="tab"], [role="button"], a, span'))
       .filter(el => visible(el) && clean(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title')) === '\u6587\u7A3F')
       .map(el => el.closest('button, [role="tab"], [role="button"], a') || el)))
@@ -1631,6 +1634,9 @@ async function extractOnlineSubtitles(webview) {
       return bComplete - aComplete || sourcePriority(b.source) - sourcePriority(a.source) || b.cues.length - a.cues.length || bEnd - aEnd;
     });
     const best = candidates[0] || { source: 'none', cues: [] };
+    if (noteTabBeforeTranscript && noteTabBeforeTranscript !== transcriptTab) {
+      try { noteTabBeforeTranscript.click(); } catch (_) {}
+    }
     return { source: best.source, cues: best.cues, plainText: documentPlainText, candidateCount: candidates.length, pageUrl: location.href, title: document.title };
   })()`;
   const extracted = await executeWithRetry(webview, code, 2, 500);
@@ -2317,13 +2323,49 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
     };
     const normalize = value => String(value || '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
     const noteLabel = /AI\s*笔记|智能笔记|视频笔记|课程笔记|内容总结|知识总结/i;
+    const roots = [document];
+    const discoverRoots = () => {
+      for (let rootIndex = 0; rootIndex < roots.length && roots.length < 40; rootIndex += 1) {
+        const root = roots[rootIndex];
+        try {
+          for (const element of Array.from(root.querySelectorAll('*')).slice(0, 8000)) {
+            if (element.shadowRoot && !roots.includes(element.shadowRoot)) roots.push(element.shadowRoot);
+            if (element.tagName === 'IFRAME') {
+              try {
+                const childDocument = element.contentDocument;
+                if (childDocument && !roots.includes(childDocument)) roots.push(childDocument);
+              } catch (_) {}
+            }
+            if (roots.length >= 40) break;
+          }
+        } catch (_) {}
+      }
+    };
+    const queryAll = selector => {
+      const found = [];
+      for (const root of roots) {
+        try { found.push(...root.querySelectorAll(selector)); } catch (_) {}
+      }
+      return found;
+    };
+    const elementById = id => {
+      if (!id) return null;
+      for (const root of roots) {
+        try {
+          const element = root.getElementById ? root.getElementById(id) : null;
+          if (element) return element;
+        } catch (_) {}
+      }
+      return null;
+    };
+    discoverRoots();
 
-    const noteTabLabel = /^(AI\s*笔记|智能笔记|视频笔记|课程笔记|内容总结|知识总结)(?:\s*[\uff08(]\d+[\uff09)])?(?:\s*(?:已生成|生成中|新|NEW))?$/i;
+    const noteTabLabel = /^(AI\s*笔记|笔记|智能笔记|视频笔记|课程笔记|内容总结|知识总结)(?:\s*[\uff08(]\d+[\uff09)])?(?:\s*(?:已生成|生成中|新|NEW))?$/i;
     const isNoteTabLabel = value => {
       const text = normalize(value);
       return text.length <= 32 && (noteTabLabel.test(text) || noteLabel.test(text) && !/字幕|文稿|课件|选集/.test(text));
     };
-    const noteTab = Array.from(document.querySelectorAll('button, [role="tab"], [role="button"], span, div'))
+    const noteTab = queryAll('button, [role="tab"], [role="button"], span, div')
       .filter(visible)
       .find(el => isNoteTabLabel(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title')));
     let notePanel = null;
@@ -2332,10 +2374,10 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
       const resolveNotePanel = () => {
         const controlledId = control.getAttribute('aria-controls') || '';
         if (controlledId) {
-          const controlled = document.getElementById(controlledId);
+          const controlled = elementById(controlledId);
           if (controlled) return controlled;
         }
-        if (control.id) return Array.from(document.querySelectorAll('[role="tabpanel"][aria-labelledby]')).find(panel => panel.getAttribute('aria-labelledby') === control.id) || null;
+        if (control.id) return queryAll('[role="tabpanel"][aria-labelledby]').find(panel => panel.getAttribute('aria-labelledby') === control.id) || null;
         return null;
       };
       notePanel = resolveNotePanel();
@@ -2343,6 +2385,7 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
       if (!/(^|[-_\s])(true|active|selected|current|open)([-_\s]|$)/i.test(state)) {
         try { control.click(); } catch (_) {}
         await wait(900);
+        discoverRoots();
         notePanel = resolveNotePanel();
       }
     }
@@ -2368,11 +2411,11 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
       candidates.push({ source, html: clone.innerHTML, text: cleanText, score });
     };
     if (notePanel) add(notePanel, 'ai-note-tab-panel', 1800);
-    document.querySelectorAll('.ql-editor, [data-testid*="ai-note-content" i], [class*="ai-note-content" i], [class*="ainote-content" i], [class*="smart-note-content" i]').forEach(el => add(el, el.matches('.ql-editor') ? 'fcb-editor' : 'verified-ai-note-content', el.matches('.ql-editor') ? 1600 : 800));
-    document.querySelectorAll('[class*="ai-note" i], [class*="ainote" i], [class*="smart-note" i], [class*="video-note" i], [id*="ai-note" i], [data-testid*="note" i]').forEach(el => add(el, 'video-page-note', 420));
-    for (const heading of Array.from(document.querySelectorAll('h1, h2, h3, h4, [role="tab"], button, span, div')).filter(el => visible(el) && isNoteTabLabel(el.textContent)).slice(0, 20)) {
+    queryAll('.ql-editor, [data-testid*="ai-note-content" i], [class*="ai-note-content" i], [class*="ainote-content" i], [class*="smart-note-content" i]').forEach(el => add(el, el.matches('.ql-editor') ? 'fcb-editor' : 'verified-ai-note-content', el.matches('.ql-editor') ? 1600 : 800));
+    queryAll('[class*="ai-note" i], [class*="ainote" i], [class*="smart-note" i], [class*="video-note" i], [id*="ai-note" i], [data-testid*="note" i]').forEach(el => add(el, 'video-page-note', 420));
+    for (const heading of queryAll('h1, h2, h3, h4, [role="tab"], button, span, div').filter(el => visible(el) && isNoteTabLabel(el.textContent)).slice(0, 20)) {
       let parent = heading.parentElement;
-      for (let depth = 0; parent && depth < 4; depth += 1, parent = parent.parentElement) add(parent, 'video-page-note-panel', 260 - depth * 40);
+      for (let depth = 0; parent && depth < 7; depth += 1, parent = parent.parentElement) add(parent, 'video-page-note-panel', 320 - depth * 40);
     }
 
     const fcbUrls = new Set();
@@ -2385,10 +2428,13 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
       if (value.includes('pan.baidu.com/fcb/edit')) fcbUrls.add(value);
     };
     addFcb(preferredFcbUrl);
-    document.querySelectorAll('a[href], [data-url], [data-href]').forEach(el => {
+    queryAll('a[href], [data-url], [data-href]').forEach(el => {
       addFcb(el.href); addFcb(el.getAttribute('data-url')); addFcb(el.getAttribute('data-href'));
     });
-    const htmlMatches = document.documentElement.innerHTML.match(/https?:\\?\/\\?\/pan\\?\.baidu\\?\.com\\?\/fcb\\?\/edit[^"'<>\s]*/g) || [];
+    const allRootHtml = roots.map(root => {
+      try { return root.documentElement ? root.documentElement.innerHTML : root.host ? root.host.innerHTML : ''; } catch (_) { return ''; }
+    }).join('\n');
+    const htmlMatches = allRootHtml.match(/https?:\\?\/\\?\/pan\\?\.baidu\\?\.com\\?\/fcb\\?\/edit[^"'<>\s]*/g) || [];
     htmlMatches.slice(0, 10).forEach(addFcb);
 
     if (!candidates.length && fcbUrls.size) {
@@ -2419,7 +2465,7 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
     let title = queryPath;
     if (!title) {
       for (const selector of titleSelectors) {
-        const el = document.querySelector(selector);
+        const el = queryAll(selector)[0];
         const value = normalize((el && (el.getAttribute('title') || el.textContent)) || '');
         if (value) { title = value.replace(/\.(mp4|mkv|mov|avi|flv|wmv|webm)$/i, ''); break; }
       }
@@ -2428,6 +2474,22 @@ async function extractVideoPageNoteSnapshot(webview, preferredFcbUrl = "") {
     return { url: location.href, title, html: best.html, text: best.text, noteSource: best.source, fcbUrl: Array.from(fcbUrls)[0] || '' };
   })()`;
   return executeWithRetry(webview, code, 2, 500);
+}
+async function extractVideoPageNoteSnapshotWithRetry(webview, preferredFcbUrl = "", attempts = 4) {
+  let best = fallbackVideoPageSnapshot(safeWebviewUrl(webview));
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const snapshot = await extractVideoPageNoteSnapshot(webview, preferredFcbUrl);
+      if (String(snapshot == null ? void 0 : snapshot.html).length > String(best.html || "").length || !best.fcbUrl && (snapshot == null ? void 0 : snapshot.fcbUrl)) best = snapshot;
+      if ((snapshot == null ? void 0 : snapshot.html) || (snapshot == null ? void 0 : snapshot.fcbUrl)) return snapshot;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts - 1) await delay(500 + attempt * 350);
+  }
+  if (!best.html && !best.fcbUrl && lastError) throw lastError;
+  return best;
 }
 function fallbackVideoPageSnapshot(videoUrl) {
   let title = "\u767E\u5EA6\u7F51\u76D8\u89C6\u9891\u7B14\u8BB0";
@@ -2923,16 +2985,11 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         const knownFcbUrl = this.findFcbUrlForVideo(videoUrl);
         let snapshot;
         try {
-          snapshot = await extractVideoPageNoteSnapshot(activeVideoWebview, knownFcbUrl);
+          snapshot = await extractVideoPageNoteSnapshotWithRetry(activeVideoWebview, knownFcbUrl);
         } catch (noteError) {
-          console.warn("Baidu Course Notes Importer: video-page AI note extraction unavailable; continuing with subtitles", safeErrorMessage(noteError));
+          console.warn("Baidu Course Notes Importer: video-page AI note extraction unavailable", safeErrorMessage(noteError));
           snapshot = fallbackVideoPageSnapshot(videoUrl);
         }
-        this.updateImportDiagnostics({
-          stage: "ai-note-collected",
-          noteSource: snapshot.noteSource || "unknown",
-          noteHtmlLength: String(snapshot.html || "").length
-        });
         const linkedFcbUrl = snapshot.fcbUrl || knownFcbUrl;
         if (!snapshot.html && linkedFcbUrl) {
           try {
@@ -2953,14 +3010,23 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
             console.warn("Baidu Course Notes Importer: linked FCB AI note extraction failed", safeErrorMessage(fcbError));
           }
         }
+        this.updateImportDiagnostics({
+          stage: snapshot.html ? "ai-note-collected" : "ai-note-unavailable",
+          noteSource: snapshot.noteSource || "unknown",
+          noteHtmlLength: String(snapshot.html || "").length
+        });
+        let matches = null;
+        if (!snapshot.html) {
+          matches = await this.findManagedFilesByVideoUrl(videoUrl);
+          if (!matches.length) {
+            throw new Error("\u5DF2\u591A\u6B21\u5C1D\u8BD5\u4F46\u4ECD\u672A\u8BFB\u53D6\u5230 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u672C\u6B21\u672A\u5207\u6362\u5230\u201C\u6587\u7A3F\u201D\uFF0C\u4E5F\u4E0D\u4F1A\u521B\u5EFA\u7A7A\u7B14\u8BB0\u3002\u8BF7\u7B49\u5F85 AI \u7B14\u8BB0\u5185\u5BB9\u5B8C\u6574\u663E\u793A\u540E\u91CD\u8BD5\u3002");
+          }
+        }
         notice.setMessage("\u6B63\u5728\u8BFB\u53D6\u5E76\u9A8C\u8BC1\u5B8C\u6574\u5B57\u5E55\u2026");
         this.updateImportDiagnostics({ stage: "subtitle-extraction" });
         const subtitleResult = await this.collectOnlineSubtitles(videoUrl, notice, activeVideoWebview, false);
-        const matches = await this.findManagedFilesByVideoUrl(videoUrl);
+        if (matches === null) matches = await this.findManagedFilesByVideoUrl(videoUrl);
         let file = matches.length ? await this.selectCanonicalManagedVideoFile(matches, videoUrl) : null;
-        if (!file && !snapshot.html) {
-          throw new Error("\u672A\u8BFB\u53D6\u5230 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u5DF2\u505C\u6B62\u5BFC\u5165\uFF0C\u4E0D\u4F1A\u521B\u5EFA\u7A7A\u7B14\u8BB0\u3002\u8BF7\u5148\u5728\u89C6\u9891\u9875\u6253\u5F00\u201CAI \u7B14\u8BB0\u201D\u9762\u677F\u540E\u91CD\u8BD5\u3002");
-        }
         let targetFolder = file && file.parent ? file.parent.path : this.settings.notesFolder;
         let selectedDifferentFolder = false;
         if (this.settings.chooseFolderOnImport) {

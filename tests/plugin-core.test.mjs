@@ -67,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, waitForNewVideoUrl, findFcbWebview, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, extractOnlineSubtitles, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, extractVideoPageNoteSnapshotWithRetry, waitForNewVideoUrl, findFcbWebview, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -400,6 +400,63 @@ test("video import collects subtitles before scanning or writing Vault notes", a
   assert.equal(vaultWrites, 0);
   assert.equal(instance.lastImportDiagnostics.status, "failed");
   assert.equal(instance.lastImportDiagnostics.stage, "subtitle-extraction");
+});
+
+test("video-page AI note extraction retries until lazy content appears", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  let attempts = 0;
+  const webview = {
+    getURL: () => videoUrl,
+    executeJavaScript: async () => {
+      attempts += 1;
+      return attempts < 3
+        ? { url: videoUrl, title: "lesson", html: "", text: "", noteSource: "video-page-empty", fcbUrl: "" }
+        : { url: videoUrl, title: "lesson", html: "<p>loaded AI note</p>", text: "loaded AI note", noteSource: "ai-note-tab-panel", fcbUrl: "" };
+    }
+  };
+  const snapshot = await core.extractVideoPageNoteSnapshotWithRetry(webview, "", 4);
+  assert.equal(attempts, 3);
+  assert.match(snapshot.html, /loaded AI note/);
+});
+
+test("online subtitle extraction restores the AI note tab after reading transcript", async () => {
+  let injectedCode = "";
+  const webview = {
+    getURL: () => "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4",
+    executeJavaScript: async (code) => {
+      injectedCode = code;
+      return { source: "none", cues: [], plainText: "", candidateCount: 0, pageUrl: "", title: "" };
+    }
+  };
+  await core.extractOnlineSubtitles(webview);
+  assert.match(injectedCode, /noteTabBeforeTranscript\.click\(\)/);
+});
+
+test("missing AI note stops before the page is switched to transcript", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const webview = {
+    getURL: () => videoUrl,
+    executeJavaScript: async () => ({ url: videoUrl, title: "lesson", html: "", text: "", noteSource: "video-page-empty", fcbUrl: "" })
+  };
+  const instance = Object.create(plugin.default.prototype);
+  instance.settings = { videoByFcbUrl: {}, notesFolder: "notes", attachmentsSubfolder: "attachments", chooseFolderOnImport: false, downloadImages: true };
+  instance.app = {
+    workspace: { activeLeaf: { view: { containerEl: { querySelectorAll: () => [webview] } } }, getMostRecentLeaf: () => null },
+    vault: {}
+  };
+  let subtitleCollections = 0;
+  instance.findManagedFilesByVideoUrl = async () => [];
+  instance.collectOnlineSubtitles = async () => { subtitleCollections += 1; return { source: "none", cues: [], plainText: "" }; };
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await instance.importCurrentNoteAndSubtitles();
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(subtitleCollections, 0);
+  assert.equal(instance.lastImportDiagnostics.status, "failed");
+  assert.equal(instance.lastImportDiagnostics.stage, "ai-note-unavailable");
 });
 
 test("cancelling video import folder selection leaves no running diagnostic or note write", async () => {
