@@ -3047,6 +3047,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       ].filter(Boolean)));
       this.updateImportDiagnostics({ stage: "subtitle-extraction", videoWebviewCount: videoWebviews.length });
       for (let attempt = 0; attempt < 5; attempt += 1) {
+        notice.setMessage(`\u6B63\u5728\u8BFB\u53D6\u5B8C\u6574\u5B57\u5E55\uFF08\u7B2C ${attempt + 1}/5 \u6B21\u68C0\u6D4B\uFF09\u2026`);
         for (let viewIndex = 0; viewIndex < videoWebviews.length; viewIndex += 1) {
           const candidateWebview = videoWebviews[viewIndex];
           try {
