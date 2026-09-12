@@ -2423,7 +2423,7 @@ function fallbackVideoPageSnapshot(videoUrl) {
   return { url: videoUrl, title, html: "", text: "", noteSource: "video-page-unavailable", fcbUrl: "" };
 }
 async function autoOpenLargeVideo(webview) {
-  const before = new Set(getWebviews().map(safeWebviewUrl).filter(isVideoUrl));
+  const before = new Set(getWebviews());
   const more = await locateBaiduControl(webview, "more");
   if (!more) return "";
   if (isVideoUrl(more.url)) return more.url;
@@ -2500,11 +2500,10 @@ async function sendWebviewClick(webview, target) {
 async function waitForNewVideoUrl(webview, before, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const urls = getWebviews().map(safeWebviewUrl).filter(isVideoUrl);
-    const newlyOpened = urls.find((url) => !before.has(url));
-    if (newlyOpened) return newlyOpened;
     const navigatedCurrent = safeWebviewUrl(webview);
     if (isVideoUrl(navigatedCurrent)) return navigatedCurrent;
+    const newlyOpened = getWebviews().find((view) => !before.has(view) && isVideoUrl(safeWebviewUrl(view)));
+    if (newlyOpened) return safeWebviewUrl(newlyOpened);
     await delay(300);
   }
   return "";

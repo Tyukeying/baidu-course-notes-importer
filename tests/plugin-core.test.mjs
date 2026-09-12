@@ -566,7 +566,19 @@ test("FCB auto-open timeout never falls back to an unrelated singleton video", a
   const originalQuerySelectorAll = document.querySelectorAll;
   document.querySelectorAll = () => [unrelatedVideo, fcbWebview];
   try {
-    assert.equal(await core.waitForNewVideoUrl(fcbWebview, new Set(), 0), "");
+    assert.equal(await core.waitForNewVideoUrl(fcbWebview, new Set([unrelatedVideo, fcbWebview]), 1), "");
+  } finally {
+    document.querySelectorAll = originalQuerySelectorAll;
+  }
+});
+
+test("FCB auto-open accepts a video only when its WebView is newly created", async () => {
+  const fcbWebview = { getURL: () => "https://pan.baidu.com/fcb/edit?fsid=123" };
+  const newVideo = { getURL: () => "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4" };
+  const originalQuerySelectorAll = document.querySelectorAll;
+  document.querySelectorAll = () => [fcbWebview, newVideo];
+  try {
+    assert.equal(await core.waitForNewVideoUrl(fcbWebview, new Set([fcbWebview]), 10), newVideo.getURL());
   } finally {
     document.querySelectorAll = originalQuerySelectorAll;
   }
