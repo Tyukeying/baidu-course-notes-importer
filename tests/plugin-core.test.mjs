@@ -56,7 +56,7 @@ function obsidianStub() {
     FuzzySuggestModal: EmptyBase,
     Notice: NoticeStub,
     MarkdownView: EmptyBase,
-    requestUrl: async () => ({ headers: { "content-type": "image/png" }, arrayBuffer: Uint8Array.from([1, 2, 3]).buffer }),
+    requestUrl: async () => ({ status: 200, headers: { "content-type": "image/png" }, arrayBuffer: Uint8Array.from([1, 2, 3, 4]).buffer }),
     normalizePath: (value) => String(value).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\.\//, "")
   }, {
     get(target, property) {
@@ -67,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, waitForNewVideoUrl, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, waitForNewVideoUrl, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -177,6 +177,14 @@ test("image localization indexes the attachment folder only once", async () => {
   await core.localizeImages(root, { vault, attachmentsFolder: "notes/attachments", noteTitle: "lesson" });
   assert.equal(fileScans, 1);
   assert.match(image.dataset.obsidianPath, /^notes\/attachments\/lesson-[a-f0-9]{8}\.png$/);
+});
+
+test("image downloads reject login pages, failures and oversized responses", () => {
+  const fourBytes = Uint8Array.from([1, 2, 3, 4]).buffer;
+  assert.equal(core.validateDownloadedImage({ status: 200, headers: { "Content-Type": "image/png; charset=binary" }, arrayBuffer: fourBytes }).contentType, "image/png");
+  assert.throws(() => core.validateDownloadedImage({ status: 403, headers: { "content-type": "image/png" }, arrayBuffer: fourBytes }), /HTTP 403/);
+  assert.throws(() => core.validateDownloadedImage({ status: 200, headers: { "content-type": "text\/html" }, arrayBuffer: fourBytes }), /\u975E\u56FE\u7247/);
+  assert.throws(() => core.validateDownloadedImage({ status: 200, headers: { "content-type": "image/png" }, arrayBuffer: new ArrayBuffer(20 * 1024 * 1024 + 1) }), /20 MB/);
 });
 
 test("diagnostic reports keep useful counts and redact URLs and credentials", () => {

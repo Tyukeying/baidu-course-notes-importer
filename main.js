@@ -949,8 +949,9 @@ async function localizeImages(root2, options) {
         continue;
       }
       const response = await (0, import_obsidian.requestUrl)({ url: imageUrl, method: "GET" });
-      const extension = inferExtension(imageUrl, response.headers["content-type"]);
-      const data = response.arrayBuffer;
+      const downloaded = validateDownloadedImage(response);
+      const extension = inferExtension(imageUrl, downloaded.contentType);
+      const data = downloaded.data;
       const contentHash = binaryHash(data);
       const matchingExisting = await findExistingImageByContent(options.vault, folderImages, notePrefix, data, contentHash);
       let path;
@@ -972,6 +973,19 @@ async function localizeImages(root2, options) {
       console.warn("Baidu Course Notes Importer: image download failed", safeErrorMessage(error));
     }
   }
+}
+function validateDownloadedImage(response) {
+  const status = Number(response == null ? void 0 : response.status);
+  if (Number.isFinite(status) && (status < 200 || status >= 300)) throw new Error(`\u56FE\u7247\u8BF7\u6C42\u8FD4\u56DE HTTP ${status}`);
+  const headers = response && response.headers && typeof response.headers === "object" ? response.headers : {};
+  const contentTypeEntry = Object.entries(headers).find(([key]) => key.toLowerCase() === "content-type");
+  const contentType = String(contentTypeEntry ? contentTypeEntry[1] : "").split(";")[0].trim().toLowerCase();
+  if (contentType && !/^image\/(?:jpeg|png|gif|webp|svg\+xml|avif)$/.test(contentType)) throw new Error(`\u56FE\u7247\u94FE\u63A5\u8FD4\u56DE\u4E86\u975E\u56FE\u7247\u5185\u5BB9\uFF08${contentType}\uFF09`);
+  const data = response == null ? void 0 : response.arrayBuffer;
+  const size = data && typeof data.byteLength === "number" ? data.byteLength : 0;
+  if (size < 4) throw new Error("\u56FE\u7247\u5185\u5BB9\u4E3A\u7A7A\u6216\u4E0D\u5B8C\u6574");
+  if (size > 20 * 1024 * 1024) throw new Error("\u5355\u5F20\u56FE\u7247\u8D85\u8FC7 20 MB \u5B89\u5168\u4E0A\u9650");
+  return { data, contentType };
 }
 function safeRemoteImageUrl(value) {
   try {
