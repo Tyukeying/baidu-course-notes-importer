@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.6
+
+- Associate an FCB document only with video navigation emitted by the same Web Viewer, preventing cross-course mappings when several Baidu tabs are open.
+- Stop guessing that a lone open Baidu video belongs to the current FCB document when no exact evidence exists.
+- Add a command to copy privacy-safe diagnostics for the most recent import, including stage, source, cue counts, candidate counts and retry results.
+- Redact full URLs, authentication tokens, cookies and Baidu session identifiers from copied diagnostics.
+
 ## 0.5.5
 
 - Add repeatable release, syntax, bundle-load, and core behavior checks before deployment.
