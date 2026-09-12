@@ -2949,6 +2949,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
           notice.setMessage("\u8BF7\u9009\u62E9\u7B14\u8BB0\u4FDD\u5B58\u6587\u4EF6\u5939\uFF1BAI \u7B14\u8BB0\u56FE\u7247\u5C06\u4FDD\u5B58\u5230\u5176\u9644\u4EF6\u5B50\u76EE\u5F55\u2026");
           const selectedFolder = await this.chooseImportFolder();
           if (selectedFolder === null) {
+            this.updateImportDiagnostics({ status: "cancelled", stage: "folder-selection" });
             notice.hide();
             new import_obsidian4.Notice("\u5DF2\u53D6\u6D88\u5BFC\u5165");
             return;

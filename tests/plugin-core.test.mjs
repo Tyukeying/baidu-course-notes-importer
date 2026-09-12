@@ -394,6 +394,29 @@ test("video import collects subtitles before scanning or writing Vault notes", a
   assert.equal(instance.lastImportDiagnostics.stage, "subtitle-extraction");
 });
 
+test("cancelling video import folder selection leaves no running diagnostic or note write", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const webview = {
+    getURL: () => videoUrl,
+    executeJavaScript: async () => ({ url: videoUrl, title: "lesson", html: "<p>AI note</p>", text: "AI note", noteSource: "ai-note-tab-panel", fcbUrl: "" })
+  };
+  const instance = Object.create(plugin.default.prototype);
+  instance.settings = { videoByFcbUrl: {}, notesFolder: "notes", attachmentsSubfolder: "attachments", chooseFolderOnImport: true, downloadImages: true };
+  instance.app = {
+    workspace: { activeLeaf: { view: { containerEl: { querySelectorAll: () => [webview] } } }, getMostRecentLeaf: () => null },
+    vault: {}
+  };
+  instance.collectOnlineSubtitles = async () => ({ source: "network-json", cues: Array.from({ length: 5 }, (_, start) => ({ start, end: start + 1, text: `cue ${start}` })), plainText: "" });
+  instance.findManagedFilesByVideoUrl = async () => [];
+  instance.chooseImportFolder = async () => null;
+  let commits = 0;
+  instance.commitVideoPageImport = async () => { commits += 1; };
+  await instance.importCurrentNoteAndSubtitles();
+  assert.equal(commits, 0);
+  assert.equal(instance.lastImportDiagnostics.status, "cancelled");
+  assert.equal(instance.lastImportDiagnostics.stage, "folder-selection");
+});
+
 test("optional subtitle fallback leaves the existing note unchanged", async () => {
   const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
   const file = { path: "notes/lesson.md" };
