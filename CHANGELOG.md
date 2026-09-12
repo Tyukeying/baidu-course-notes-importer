@@ -12,6 +12,12 @@
 - Limit subtitle resource probing to explicit or recent fallback requests on Baidu-related domains.
 - Rename the user-facing AI-note action from “sync” to “refresh” while retaining the existing command ID and settings compatibility.
 - Show progress for each of the five bounded subtitle-detection attempts.
+- Validate Baidu Web Viewer URLs by protocol, host and path instead of accepting lookalike URL text.
+- Build video-page AI-note and subtitle sections together before one body update, and leave existing notes untouched when folder selection is cancelled.
+- Normalize cross-device settings, discard invalid mappings, bound saved FCB/video associations, and prevent overlapping import commands.
+- Track auto-opened videos by WebView instance, clear stale FCB navigation context, and reuse mappings by stable FCB identity after login parameters change.
+- Validate image response status, MIME type and size before writing an attachment, so expired links cannot save an HTML error page as an image.
+- Redact URLs and session credentials from console errors and user-facing failure messages as well as copied diagnostics.
 
 ## 0.5.5
 
