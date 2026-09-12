@@ -56,6 +56,7 @@ function obsidianStub() {
     FuzzySuggestModal: EmptyBase,
     Notice: NoticeStub,
     MarkdownView: EmptyBase,
+    requestUrl: async () => ({ headers: { "content-type": "image/png" }, arrayBuffer: Uint8Array.from([1, 2, 3]).buffer }),
     normalizePath: (value) => String(value).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\.\//, "")
   }, {
     get(target, property) {
@@ -66,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, managedSection, replaceOrInsertManagedSection, sameVideo, getQueryPath, redactDiagnosticText, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizeOnlineCues, hasCompleteTimedSubtitles, managedSection, replaceOrInsertManagedSection, sameVideo, getQueryPath, redactDiagnosticText, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -126,6 +127,30 @@ test("stable image identity removes expiring credentials but keeps content ident
   assert.equal(left, right);
   assert.match(left, /width=800/);
   assert.doesNotMatch(left, /secret|other|token=|ts=/);
+});
+
+test("remote image safety allows Baidu HTTPS and rejects local network targets", () => {
+  assert.match(core.safeRemoteImageUrl("//bj.bcebos.com/course/image.jpg"), /^https:\/\/bj\.bcebos\.com\//);
+  assert.equal(core.safeRemoteImageUrl("file:///etc/passwd"), "");
+  assert.equal(core.safeRemoteImageUrl("http://localhost:8080/image"), "");
+  assert.equal(core.safeRemoteImageUrl("http://127.0.0.1/image"), "");
+  assert.equal(core.safeRemoteImageUrl("http://192.168.1.20/image"), "");
+  assert.equal(core.safeRemoteImageUrl("http://[::1]/image"), "");
+});
+
+test("image localization indexes the attachment folder only once", async () => {
+  const image = { getAttribute: () => "https://bj.bcebos.com/course/image.jpg", dataset: {} };
+  const root = { querySelectorAll: () => [image] };
+  let fileScans = 0;
+  const vault = {
+    getFiles: () => { fileScans += 1; return []; },
+    getAbstractFileByPath: () => null,
+    createFolder: async () => {},
+    createBinary: async (path, data) => ({ path, basename: path.split("/").pop().replace(/\.[^.]+$/, ""), extension: "png", parent: { path: "notes/attachments" }, stat: { size: data.byteLength } })
+  };
+  await core.localizeImages(root, { vault, attachmentsFolder: "notes/attachments", noteTitle: "lesson" });
+  assert.equal(fileScans, 1);
+  assert.match(image.dataset.obsidianPath, /^notes\/attachments\/lesson-[a-f0-9]{8}\.png$/);
 });
 
 test("diagnostic reports keep useful counts and redact URLs and credentials", () => {

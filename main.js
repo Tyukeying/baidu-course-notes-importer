@@ -930,22 +930,29 @@ async function localizeImages(root2, options) {
   if (!folder) return;
   await ensureFolder(options.vault, folder);
   const notePrefix = sanitizeFileName(options.noteTitle);
+  const folderImages = options.vault.getFiles().filter((file) => file.parent && file.parent.path === folder && /^(jpe?g|png|gif|webp|svg|avif)$/i.test(file.extension));
+  const imageByStem = new Map(folderImages.map((file) => [file.basename, file]));
   for (let index = 0; index < images.length; index += 1) {
     const image = images[index];
     const src = image.getAttribute("src");
     if (!src || src.startsWith("data:") || src.startsWith("blob:")) continue;
+    const imageUrl = safeRemoteImageUrl(src);
+    if (!imageUrl) {
+      console.warn("Baidu Course Notes Importer: skipped unsafe image URL");
+      continue;
+    }
     try {
-      const stableStem = `${notePrefix}-${shortHash(stableImageIdentity(src))}`;
-      const stableExisting = options.vault.getFiles().find((file) => file.parent && file.parent.path === folder && file.basename === stableStem && /^(jpe?g|png|gif|webp|svg|avif)$/i.test(file.extension));
+      const stableStem = `${notePrefix}-${shortHash(stableImageIdentity(imageUrl))}`;
+      const stableExisting = imageByStem.get(stableStem);
       if (stableExisting) {
         image.dataset.obsidianPath = stableExisting.path;
         continue;
       }
-      const response = await (0, import_obsidian.requestUrl)({ url: src, method: "GET" });
-      const extension = inferExtension(src, response.headers["content-type"]);
+      const response = await (0, import_obsidian.requestUrl)({ url: imageUrl, method: "GET" });
+      const extension = inferExtension(imageUrl, response.headers["content-type"]);
       const data = response.arrayBuffer;
       const contentHash = binaryHash(data);
-      const matchingExisting = await findExistingImageByContent(options.vault, folder, notePrefix, data, contentHash);
+      const matchingExisting = await findExistingImageByContent(options.vault, folderImages, notePrefix, data, contentHash);
       let path;
       if (matchingExisting) {
         path = matchingExisting.path;
@@ -953,13 +960,34 @@ async function localizeImages(root2, options) {
         const base = `${stableStem}.${extension}`;
         path = (0, import_obsidian.normalizePath)(`${folder}/${base}`);
         if (!options.vault.getAbstractFileByPath(path)) {
-          await options.vault.createBinary(path, data);
+          const created = await options.vault.createBinary(path, data);
+          if (created) {
+            folderImages.push(created);
+            imageByStem.set(created.basename, created);
+          }
         }
       }
       image.dataset.obsidianPath = path;
     } catch (error) {
       console.warn("Netdisk AI Notes Importer: image download failed", src, error);
     }
+  }
+}
+function safeRemoteImageUrl(value) {
+  try {
+    const url = new URL(String(value || ""), "https://pan.baidu.com/");
+    if (!/^https?:$/.test(url.protocol)) return "";
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) return "";
+    const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
+    if (ipv4) {
+      const parts = ipv4.slice(1).map(Number);
+      if (parts.some((part) => part > 255) || parts[0] === 10 || parts[0] === 127 || parts[0] === 0 || parts[0] === 169 && parts[1] === 254 || parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31 || parts[0] === 192 && parts[1] === 168) return "";
+    }
+    if (hostname === "::1" || hostname.startsWith("fc") || hostname.startsWith("fd") || hostname.startsWith("fe80:")) return "";
+    return url.toString();
+  } catch (e) {
+    return "";
   }
 }
 function stableImageIdentity(value) {
@@ -980,8 +1008,8 @@ function stableImageIdentity(value) {
 function binaryHash(value) {
   return node_crypto.createHash("sha256").update(new Uint8Array(value)).digest("hex");
 }
-async function findExistingImageByContent(vault, folder, notePrefix, data, expectedHash) {
-  const candidates = vault.getFiles().filter((file) => file.parent && file.parent.path === folder && file.basename.startsWith(`${notePrefix}-`) && file.stat.size === data.byteLength && /^(jpe?g|png|gif|webp|svg|avif)$/i.test(file.extension));
+async function findExistingImageByContent(vault, folderImages, notePrefix, data, expectedHash) {
+  const candidates = folderImages.filter((file) => file.basename.startsWith(`${notePrefix}-`) && file.stat.size === data.byteLength);
   for (const file of candidates) {
     try {
       const existing = await vault.readBinary(file);
