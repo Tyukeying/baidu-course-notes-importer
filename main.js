@@ -969,7 +969,7 @@ async function localizeImages(root2, options) {
       }
       image.dataset.obsidianPath = path;
     } catch (error) {
-      console.warn("Baidu Course Notes Importer: image download failed", error);
+      console.warn("Baidu Course Notes Importer: image download failed", safeErrorMessage(error));
     }
   }
 }
@@ -2484,7 +2484,7 @@ async function sendWebviewClick(webview, target) {
       await webview.sendInputEvent({ type: "mouseUp", x: target.x, y: target.y, button: "left", clickCount: 1 });
       return;
     } catch (error) {
-      console.debug("Baidu Course Notes Importer: trusted webview click failed, using DOM fallback", error);
+      console.debug("Baidu Course Notes Importer: trusted webview click failed, using DOM fallback", safeErrorMessage(error));
     }
   }
   const fallback = `(() => {
@@ -2582,6 +2582,9 @@ function errorMessage(error) {
 }
 function redactDiagnosticText(value) {
   return String(value == null ? "" : value).replace(/https?:\/\/[^\s)\]}>]+/gi, "[URL]").replace(/((?:authorization|access[_-]?token|token|signature|sign|cookie|bduss|stoken|x-bce-[\w-]+)\s*[=:]\s*)[^\s&,;]+/gi, "$1[REDACTED]").replace(/\s+/g, " ").trim().slice(0, 500);
+}
+function safeErrorMessage(error) {
+  return redactDiagnosticText(messageOf(error));
 }
 function formatImportDiagnostics(diagnostics) {
   if (!diagnostics) return "";
@@ -2816,7 +2819,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       await navigator.clipboard.writeText(report);
       new import_obsidian4.Notice("\u5DF2\u590D\u5236\u6700\u8FD1\u4E00\u6B21\u5BFC\u5165\u8BCA\u65AD\u4FE1\u606F");
     } catch (error) {
-      console.error("Baidu Course Notes Importer diagnostic copy failed", error);
+      console.error("Baidu Course Notes Importer diagnostic copy failed", safeErrorMessage(error));
       new import_obsidian4.Notice("\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u5728\u5F00\u53D1\u8005\u63A7\u5236\u53F0\u67E5\u770B\u8BCA\u65AD\u4FE1\u606F");
       console.info(report);
     }
@@ -2876,8 +2879,8 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         return;
       }
       this.failImportDiagnostics(error, this.lastImportDiagnostics && this.lastImportDiagnostics.stage || "fcb-import");
-      console.error("Baidu Course Notes Importer import failed", error);
-      new import_obsidian4.Notice(`\u5BFC\u5165\u5931\u8D25\uFF1A${messageOf(error)}`, 8e3);
+      console.error("Baidu Course Notes Importer import failed", safeErrorMessage(error));
+      new import_obsidian4.Notice(`\u5BFC\u5165\u5931\u8D25\uFF1A${safeErrorMessage(error)}`, 8e3);
     }
   }
   async importCurrentNoteAndSubtitles() {
@@ -2894,7 +2897,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         try {
           snapshot = await extractVideoPageNoteSnapshot(activeVideoWebview, knownFcbUrl);
         } catch (noteError) {
-          console.warn("Baidu Course Notes Importer: video-page AI note extraction unavailable; continuing with subtitles", noteError);
+          console.warn("Baidu Course Notes Importer: video-page AI note extraction unavailable; continuing with subtitles", safeErrorMessage(noteError));
           snapshot = fallbackVideoPageSnapshot(videoUrl);
         }
         this.updateImportDiagnostics({
@@ -2919,7 +2922,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
               this.rememberVideoUrl(snapshot.fcbUrl, videoUrl);
             }
           } catch (fcbError) {
-            console.warn("Baidu Course Notes Importer: linked FCB AI note extraction failed", linkedFcbUrl, fcbError);
+            console.warn("Baidu Course Notes Importer: linked FCB AI note extraction failed", safeErrorMessage(fcbError));
           }
         }
         notice.setMessage("\u6B63\u5728\u8BFB\u53D6\u5E76\u9A8C\u8BC1\u5B8C\u6574\u5B57\u5E55\u2026");
@@ -3009,8 +3012,8 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         return;
       }
       this.failImportDiagnostics(error, this.lastImportDiagnostics && this.lastImportDiagnostics.stage || "video-import");
-      console.error("Baidu Course Notes Importer online note/subtitle import failed", error);
-      new import_obsidian4.Notice(`\u7F51\u9875\u5BFC\u5165\u5931\u8D25\uFF1A${messageOf(error)}`, 1e4);
+      console.error("Baidu Course Notes Importer online note/subtitle import failed", safeErrorMessage(error));
+      new import_obsidian4.Notice(`\u7F51\u9875\u5BFC\u5165\u5931\u8D25\uFF1A${safeErrorMessage(error)}`, 1e4);
     }
   }
   async collectOnlineSubtitles(targetVideoUrl, notice, preferredWebview, allowMissing = false) {
@@ -3071,7 +3074,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
             if (extractedComplete > bestComplete || extractedComplete === bestComplete && sourcePriority(extracted.source) > sourcePriority(best.source) || extractedComplete === bestComplete && sourcePriority(extracted.source) === sourcePriority(best.source) && (extracted.cues.length > best.cues.length || extracted.cues.length === best.cues.length && String(extracted.plainText || "").length > String(best.plainText || "").length)) best = extracted;
           } catch (extractError) {
             this.addSubtitleDiagnosticAttempt({ attempt: attempt + 1, view: viewIndex + 1, source: "error", cueCount: 0, candidateCount: 0, plainTextLength: 0, error: redactDiagnosticText(messageOf(extractError)) });
-            console.debug("Baidu Course Notes Importer: subtitle extraction attempt failed", safeWebviewUrl(candidateWebview), extractError);
+            console.debug("Baidu Course Notes Importer: subtitle extraction attempt failed", safeErrorMessage(extractError));
           }
         }
         if (hasCompleteTimedSubtitles(best)) break;
@@ -3128,8 +3131,8 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       this.failImportDiagnostics(error, this.lastImportDiagnostics && this.lastImportDiagnostics.stage || "subtitle-refresh");
       if (ownNotice) {
         ownNotice.hide();
-        console.error("Baidu Course Notes Importer online subtitle import failed", error);
-        new import_obsidian4.Notice(`\u7F51\u9875\u5B57\u5E55\u5BFC\u5165\u5931\u8D25\uFF1A${messageOf(error)}`, 1e4);
+        console.error("Baidu Course Notes Importer online subtitle import failed", safeErrorMessage(error));
+        new import_obsidian4.Notice(`\u7F51\u9875\u5B57\u5E55\u5BFC\u5165\u5931\u8D25\uFF1A${safeErrorMessage(error)}`, 1e4);
       }
       throw error;
     }
@@ -3239,7 +3242,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         else imported += 1;
       } catch (error) {
         failed += 1;
-        console.error("Baidu Course Notes Importer batch item failed", redactDiagnosticText(url), error);
+        console.error("Baidu Course Notes Importer batch item failed", redactDiagnosticText(url), safeErrorMessage(error));
       }
     }
     notice.hide();
@@ -3272,8 +3275,8 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       }).open();
     } catch (error) {
       notice.hide();
-      console.error("Baidu Course Notes Importer subtitle cache scan failed", error);
-      new import_obsidian4.Notice(`\u5B57\u5E55\u7F13\u5B58\u626B\u63CF\u5931\u8D25\uFF1A${messageOf(error)}`, 8e3);
+      console.error("Baidu Course Notes Importer subtitle cache scan failed", safeErrorMessage(error));
+      new import_obsidian4.Notice(`\u5B57\u5E55\u7F13\u5B58\u626B\u63CF\u5931\u8D25\uFF1A${safeErrorMessage(error)}`, 8e3);
     }
   }
   async saveSubtitleCacheItem(item, targetFolder) {
@@ -3310,8 +3313,8 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       new import_obsidian4.Notice(item.aiNote ? `\u5DF2\u5BFC\u5165 AI \u7B14\u8BB0\u548C ${item.cues.length} \u6761\u65F6\u95F4\u6233\u5B57\u5E55` : `\u672A\u5339\u914D\u5230 AI \u7B14\u8BB0\u7F13\u5B58\uFF1B\u5DF2\u5BFC\u5165 ${item.cues.length} \u6761\u5B57\u5E55`);
     } catch (error) {
       notice.hide();
-      console.error("Baidu Course Notes Importer subtitle import failed", error);
-      new import_obsidian4.Notice(`\u5B57\u5E55\u5BFC\u5165\u5931\u8D25\uFF1A${messageOf(error)}`, 8e3);
+      console.error("Baidu Course Notes Importer subtitle import failed", safeErrorMessage(error));
+      new import_obsidian4.Notice(`\u5B57\u5E55\u5BFC\u5165\u5931\u8D25\uFF1A${safeErrorMessage(error)}`, 8e3);
     }
   }
   composeCourseManagedSection(item) {
@@ -3542,8 +3545,8 @@ ${END_MARKER}`;
       }
     } catch (error) {
       notice.hide();
-      console.error("Baidu Course Notes Importer refresh failed", error);
-      new import_obsidian4.Notice(`\u5237\u65B0\u5931\u8D25\uFF1A${messageOf(error)}`, 8e3);
+      console.error("Baidu Course Notes Importer refresh failed", safeErrorMessage(error));
+      new import_obsidian4.Notice(`\u5237\u65B0\u5931\u8D25\uFF1A${safeErrorMessage(error)}`, 8e3);
     }
   }
   async seekFromNote(sourcePath, seconds) {
@@ -3561,15 +3564,15 @@ ${END_MARKER}`;
       try {
         activeVideo = await waitAndSeek(videoUrl, seconds);
       } catch (firstError) {
-        console.debug("Baidu Course Notes Importer: rebuilding stale video Web Viewer", firstError);
+        console.debug("Baidu Course Notes Importer: rebuilding stale video Web Viewer", safeErrorMessage(firstError));
         await openInWebViewer(this.app, videoUrl, this.settings.videoOpenPosition);
         activeVideo = await waitAndSeek(videoUrl, seconds);
       }
       const videoLeaf = this.findLeafForWebview(activeVideo);
       if (videoLeaf) this.app.workspace.revealLeaf(videoLeaf);
     } catch (error) {
-      console.error("Baidu Course Notes Importer seek failed", error);
-      new import_obsidian4.Notice(`\u89C6\u9891\u8DF3\u8F6C\u5931\u8D25\uFF1A${messageOf(error)}`, 8e3);
+      console.error("Baidu Course Notes Importer seek failed", safeErrorMessage(error));
+      new import_obsidian4.Notice(`\u89C6\u9891\u8DF3\u8F6C\u5931\u8D25\uFF1A${safeErrorMessage(error)}`, 8e3);
     }
   }
   async openVideo(url) {

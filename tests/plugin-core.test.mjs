@@ -67,7 +67,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -180,6 +180,12 @@ test("diagnostic reports keep useful counts and redact URLs and credentials", ()
   assert.match(report, /candidates=3/);
   assert.doesNotMatch(report, /https?:|secret|private|hidden/);
   assert.match(report, /\[URL\]|\[REDACTED\]/);
+});
+
+test("user-facing error text redacts request URLs and session credentials", () => {
+  const message = core.safeErrorMessage(new Error("request https://pan.baidu.com/api?token=secret failed; BDUSS=private"));
+  assert.doesNotMatch(message, /https?:|secret|private/);
+  assert.match(message, /\[URL\]|\[REDACTED\]/);
 });
 
 test("attachment folder stays beside the selected note folder", () => {
