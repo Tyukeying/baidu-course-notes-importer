@@ -1,0 +1,9 @@
+{
+  "name": "baidu-course-notes-importer",
+  "version": "0.5.4",
+  "private": true,
+  "description": "Verification harness for the Baidu Course Notes Importer release bundle.",
+  "scripts": {
+    "check": "node --check main.js && node scripts/verify-release.mjs && node tests/plugin-core.test.mjs"
+  }
+}
