@@ -603,6 +603,21 @@ test("FCB navigation only associates a video with its originating webview", () =
   assert.deepEqual(associations, [[fcbUrl, videoUrl]]);
 });
 
+test("FCB video mappings stay bounded during long-running sessions", () => {
+  const instance = Object.create(plugin.default.prototype);
+  instance.settings = { videoByFcbUrl: {} };
+  instance.saveSettings = async () => {};
+  for (let index = 0; index < 205; index += 1) {
+    instance.rememberVideoUrl(
+      `https://pan.baidu.com/fcb/edit?fsid=${index}`,
+      `https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson-${index}.mp4`
+    );
+  }
+  assert.equal(Object.keys(instance.settings.videoByFcbUrl).length, 200);
+  assert.equal(instance.settings.videoByFcbUrl["https://pan.baidu.com/fcb/edit?fsid=0"], undefined);
+  assert.match(instance.settings.videoByFcbUrl["https://pan.baidu.com/fcb/edit?fsid=204"], /lesson-204/);
+});
+
 test("legacy FCB import still prepares before committing", async () => {
   const order = [];
   const prepared = { skipped: true, file: { path: "notes/lesson.md" }, videoUrl: "", temporaryVideoViews: [] };

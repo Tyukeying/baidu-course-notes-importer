@@ -3615,7 +3615,11 @@ ${END_MARKER}`;
     if (!isFcbUrl(fcbUrl) || !isVideoUrl(videoUrl)) return;
     if (this.settings.videoByFcbUrl[fcbUrl] === videoUrl) return;
     this.settings.videoByFcbUrl[fcbUrl] = videoUrl;
-    void this.saveSettings();
+    const entries = Object.entries(this.settings.videoByFcbUrl);
+    if (entries.length > 200) this.settings.videoByFcbUrl = Object.fromEntries(entries.slice(-200));
+    void this.saveSettings().catch((error) => {
+      console.error("Baidu Course Notes Importer mapping save failed", safeErrorMessage(error));
+    });
   }
   startWebviewTracking() {
     const attachAll = () => getWebviews().forEach((view) => this.attachWebview(view));
