@@ -2553,6 +2553,7 @@ function formatImportDiagnostics(diagnostics) {
     ["subtitle_source", diagnostics.subtitleSource],
     ["subtitle_cue_count", diagnostics.subtitleCueCount],
     ["plain_text_length", diagnostics.plainTextLength],
+    ["duplicate_note_count", diagnostics.duplicateNoteCount],
     ["error", diagnostics.error]
   ];
   for (const [key, value] of optional) {
@@ -2871,7 +2872,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         this.updateImportDiagnostics({ stage: "subtitle-extraction" });
         const subtitleResult = await this.collectOnlineSubtitles(videoUrl, notice, activeVideoWebview, false);
         const matches = await this.findManagedFilesByVideoUrl(videoUrl);
-        let file = matches.length ? await this.consolidateManagedVideoFiles(matches, videoUrl) : null;
+        let file = matches.length ? await this.selectCanonicalManagedVideoFile(matches, videoUrl) : null;
         if (!file && !snapshot.html) {
           throw new Error("\u672A\u8BFB\u53D6\u5230 AI \u7B14\u8BB0\u6B63\u6587\uFF0C\u5DF2\u505C\u6B62\u5BFC\u5165\uFF0C\u4E0D\u4F1A\u521B\u5EFA\u7A7A\u7B14\u8BB0\u3002\u8BF7\u5148\u5728\u89C6\u9891\u9875\u6253\u5F00\u201CAI \u7B14\u8BB0\u201D\u9762\u677F\u540E\u91CD\u8BD5\u3002");
         }
@@ -3620,21 +3621,16 @@ ${END_MARKER}`;
     }
     return matches.sort((a, b) => b.score - a.score);
   }
-  async consolidateManagedVideoFiles(matches, videoUrl) {
+  async selectCanonicalManagedVideoFile(matches, videoUrl) {
     if (!matches.length) return null;
     const canonical = matches[0];
-    const bestNote = matches.slice().sort((a, b) => b.note.length - a.note.length)[0].note;
-    const bestSubtitles = matches.slice().sort((a, b) => b.subtitles.length - a.subtitles.length)[0].subtitles;
-    let merged = canonical.content;
-    if (bestNote) merged = replaceOrInsertManagedSection(merged, bestNote, START_MARKER, END_MARKER, "");
-    if (bestSubtitles) merged = replaceOrInsertManagedSection(merged, bestSubtitles, SUBTITLE_START_MARKER, SUBTITLE_END_MARKER, START_MARKER);
-    if (merged !== canonical.content) await this.app.vault.modify(canonical.file, merged);
     await this.app.fileManager.processFrontMatter(canonical.file, (fm) => {
       fm.video_url = videoUrl;
       fm.video_path = getQueryPath(videoUrl);
     });
     if (matches.length > 1) {
-      console.info("Baidu Course Notes Importer: kept duplicate notes; updated canonical file only", canonical.file.path, matches.slice(1).map((item) => item.file.path));
+      this.updateImportDiagnostics({ duplicateNoteCount: matches.length - 1 });
+      console.info("Baidu Course Notes Importer: duplicate notes preserved without merging; selected canonical file", canonical.file.path, matches.slice(1).map((item) => item.file.path));
     }
     return canonical.file;
   }

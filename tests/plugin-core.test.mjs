@@ -361,7 +361,7 @@ test("successful video import commits subtitles once and opens the note after co
     order.push("find");
     return [{ file }];
   };
-  instance.consolidateManagedVideoFiles = async () => {
+  instance.selectCanonicalManagedVideoFile = async () => {
     order.push("consolidate");
     return file;
   };
@@ -380,6 +380,32 @@ test("successful video import commits subtitles once and opens the note after co
   assert.equal(instance.lastImportDiagnostics.status, "success");
   assert.equal(instance.lastImportDiagnostics.stage, "complete");
   assert.equal(instance.lastImportDiagnostics.subtitleCueCount, 5);
+});
+
+test("duplicate managed notes are preserved without cross-file content merging", async () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
+  const canonical = { file: { path: "notes/lesson.md" }, content: "canonical", note: "short", subtitles: "", score: 10 };
+  const duplicate = { file: { path: "notes/lesson-2.md" }, content: "duplicate", note: "different and longer note", subtitles: "different subtitles", score: 5 };
+  let contentWrites = 0;
+  let frontmatterWrites = 0;
+  const instance = Object.create(plugin.default.prototype);
+  instance.lastImportDiagnostics = null;
+  instance.app = {
+    vault: { modify: async () => { contentWrites += 1; } },
+    fileManager: { processFrontMatter: async (_file, callback) => { frontmatterWrites += 1; const fm = {}; callback(fm); assert.equal(fm.video_path, "/course/lesson.mp4"); } }
+  };
+  const originalInfo = console.info;
+  console.info = () => {};
+  let selected;
+  try {
+    selected = await instance.selectCanonicalManagedVideoFile([canonical, duplicate], videoUrl);
+  } finally {
+    console.info = originalInfo;
+  }
+  assert.equal(selected, canonical.file);
+  assert.equal(contentWrites, 0);
+  assert.equal(frontmatterWrites, 1);
+  assert.equal(instance.lastImportDiagnostics.duplicateNoteCount, 1);
 });
 
 test("FCB resolution never guesses from an unrelated singleton video tab", () => {
