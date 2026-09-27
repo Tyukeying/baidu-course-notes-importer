@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.12
+
+- Recover full timestamped SRT from the current Vault's Obsidian Web Viewer cache when the page exposes only plain transcript text. Match the beginning, length and multiple middle passages before accepting a cache entry, and reject ambiguous matches.
+- Ignore Baidu's AI subtitle header even when it occupies the first seconds of the SRT.
+- Include cache lookup as a separate attempt in copied import diagnostics.
+
+## 0.5.11
+
+- Preserve semantic TeX inside AI note table cells while keeping the existing table normalization.
+
+## 0.5.10
+
+- Convert Quill and KaTeX formulas from their semantic TeX value instead of concatenating rendered MathML and HTML text.
+- Give math conversion priority over generic text formatting rules.
+
+## 0.5.9
+
+- Exclude Baidu's episode list and playback status from the beginning of a plain transcript when the visible panel contains both navigation and spoken text.
+- Keep the original speech untouched when the navigation signature is absent.
+
+## 0.5.8
+
+- Pin the last selected existing Vault folder at the top of the import folder picker without showing it twice.
+
+## 0.5.7
+
+- Read visible Baidu 文稿 text from the panel beneath its tab even when the page provides no transcript-specific class or accessibility link.
+- Preserve the actual page subtitle candidate count in copied import diagnostics.
+
 ## 0.5.6
 
 - Associate an FCB document only with video navigation emitted by the same Web Viewer, preventing cross-course mappings when several Baidu tabs are open.

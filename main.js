@@ -824,11 +824,19 @@ function gfm(turndownService) {
 }
 
 // HTML to Markdown conversion.
+function mathMarkdownFromNode(node) {
+  const annotation = node.querySelector('annotation[encoding="application/x-tex"]');
+  const script = node.querySelector('script[type^="math/tex"]');
+  const raw = node.getAttribute("data-value") || node.getAttribute("data-latex") || (annotation && annotation.textContent) || (script && script.textContent) || "";
+  const latex = String(raw).trim().replace(/^\\\(|\\\)$/g, "").replace(/^\$|\$$/g, "").trim();
+  return latex && latex.length <= 5000 ? `$${latex}$` : "";
+}
 async function convertHtmlToMarkdown(options) {
   const doc = new DOMParser().parseFromString(`<div id="baidu-ai-root">${options.html}</div>`, "text/html");
   const root2 = doc.querySelector("#baidu-ai-root");
   if (!root2) throw new Error("HTML \u89E3\u6790\u5931\u8D25");
-  simplifyQuillTables(root2, doc);
+  const tableMathTokens = /* @__PURE__ */ new Map();
+  simplifyQuillTables(root2, doc, tableMathTokens);
   if (options.downloadImages) {
     await localizeImages(root2, options);
   }
@@ -899,9 +907,27 @@ ${indent}${marker}${cleaned}
       return `![[${path}${alt ? `|${alt}` : ""}]]`;
     }
   });
-  return polishMarkdown(turndown.turndown(root2.innerHTML));
+  turndown.addRule("semanticMath", {
+    filter: (node) => node instanceof HTMLElement && (node.classList.contains("ql-formula") || node.classList.contains("katex") || node.hasAttribute("data-latex")) && Boolean(mathMarkdownFromNode(node)),
+    replacement: (_content, node) => mathMarkdownFromNode(node)
+  });
+  let markdown = polishMarkdown(turndown.turndown(root2.innerHTML));
+  for (const [token, math] of tableMathTokens) markdown = markdown.replaceAll(token, math);
+  return markdown;
 }
-function simplifyQuillTables(root2, doc) {
+function tableCellTextWithMathTokens(sourceCell, doc, mathTokens) {
+  const clone = sourceCell.cloneNode(true);
+  for (const element of Array.from(clone.querySelectorAll(".ql-formula, .katex, [data-latex]"))) {
+    if (!clone.contains(element)) continue;
+    const math = mathMarkdownFromNode(element);
+    if (!math) continue;
+    const token = `BAIDUMATHTOKEN${mathTokens.size}END`;
+    mathTokens.set(token, math);
+    element.replaceWith(doc.createTextNode(token));
+  }
+  return (clone.textContent || "").replace(/\s+/g, " ").trim();
+}
+function simplifyQuillTables(root2, doc, mathTokens) {
   root2.querySelectorAll("table").forEach((sourceTable) => {
     const rows = Array.from(sourceTable.querySelectorAll("tr"));
     if (rows.length === 0) return;
@@ -911,7 +937,7 @@ function simplifyQuillTables(root2, doc) {
       Array.from(sourceRow.children).filter((cell2) => cell2.tagName === "TD" || cell2.tagName === "TH").forEach((sourceCell) => {
         var _a;
         const cell2 = doc.createElement(rowIndex === 0 ? "th" : "td");
-        cell2.textContent = ((_a = sourceCell.textContent) != null ? _a : "").replace(/\s+/g, " ").trim();
+        cell2.textContent = tableCellTextWithMathTokens(sourceCell, doc, mathTokens);
         row.appendChild(cell2);
       });
       if (row.children.length > 0) table.appendChild(row);
@@ -1261,7 +1287,8 @@ function subtitleSourceLabel(source) {
     "page-state": "\u767E\u5EA6\u9875\u9762\u6570\u636E",
     "page-transcript-dom": "\u767E\u5EA6\u5B57\u5E55\u5217\u8868",
     "baidu-document-state": "\u767E\u5EA6\u7F51\u9875\u6587\u7A3F\u65F6\u95F4\u6570\u636E",
-    "baidu-document-text": "\u767E\u5EA6\u7F51\u9875\u6587\u7A3F"
+    "baidu-document-text": "\u767E\u5EA6\u7F51\u9875\u6587\u7A3F",
+    "web-viewer-cache-srt": "Web Viewer 缓存 SRT"
   };
   return labels[source] || "Web Viewer";
 }
@@ -1309,9 +1336,40 @@ function selectSubtitleResourceUrls(entries) {
   }
   return Array.from(new Set([...explicit.slice(-24), ...fallback.slice(-8)]));
 }
+function findVisibleTranscriptPanel(pageDocument, transcriptTab, clean, getStyle, viewportWidth) {
+  if (!transcriptTab) return null;
+  const tabRect = transcriptTab.getBoundingClientRect();
+  const tabCenter = (tabRect.left + tabRect.right) / 2;
+  const panels = Array.from(pageDocument.querySelectorAll('div, section, article, [role="tabpanel"]')).filter((element) => {
+    const rect = element.getBoundingClientRect();
+    const style = getStyle(element);
+    const text = clean(element.innerText || element.textContent || "");
+    return style.display !== "none" && style.visibility !== "hidden"
+      && rect.width >= 180 && rect.width <= 720 && rect.height >= 140
+      && rect.left >= viewportWidth * 0.35 && rect.top >= tabRect.top - 20
+      && rect.left <= tabCenter + 80 && rect.right >= tabCenter - 80
+      && text.length >= 120;
+  });
+  panels.sort((left, right) => {
+    const leftLength = clean(left.innerText || left.textContent || "").length;
+    const rightLength = clean(right.innerText || right.textContent || "").length;
+    return rightLength - leftLength;
+  });
+  return panels[0] || null;
+}
+function stripTranscriptNavigationPrefix(lines) {
+  const firstSpeech = lines.findIndex((line) => line.length >= 30 && !/\.(?:mp4|mkv|mov|avi|webm)\b/i.test(line));
+  if (firstSpeech < 1) return lines;
+  const prefix = lines.slice(0, firstSpeech);
+  if (!prefix.some((line) => /^(?:选集|查看全部)$/.test(line)) || !prefix.some((line) => /\.(?:mp4|mkv|mov|avi|webm)\b/i.test(line))) return lines;
+  const lastNavigation = prefix.findLastIndex((line) => /^(?:选集|查看全部|已看完|正在播放|未观看|精选|最近\s*\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d{1,2}:\d{2}(?::\d{2})?)$/.test(line) || /\.(?:mp4|mkv|mov|avi|webm)\b/i.test(line));
+  return lastNavigation >= 0 ? lines.slice(lastNavigation + 1) : lines;
+}
 async function extractOnlineSubtitles(webview) {
   const code = String.raw`(async () => {
     const selectSubtitleResourceUrls = ${selectSubtitleResourceUrls.toString()};
+    const findVisibleTranscriptPanel = ${findVisibleTranscriptPanel.toString()};
+    const stripTranscriptNavigationPrefix = ${stripTranscriptNavigationPrefix.toString()};
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     const clean = value => String(value == null ? '' : value)
       .replace(/<br\s*\/?\s*>/gi, ' ')
@@ -1503,6 +1561,7 @@ async function extractOnlineSubtitles(webview) {
       const panelPool = [
         ...(transcriptPanelHint ? [transcriptPanelHint] : []),
         ...queryAll('[class*="transcript" i], [class*="manuscript" i], [class*="speech-text" i], [class*="document-content" i]'),
+        findVisibleTranscriptPanel(document, transcriptTab, clean, getComputedStyle, window.innerWidth),
         ...Array.from(document.querySelectorAll('div, section, article')).filter(el => {
           const rect = el.getBoundingClientRect();
           const style = getComputedStyle(el);
@@ -1511,7 +1570,7 @@ async function extractOnlineSubtitles(webview) {
           return /transcript|manuscript|speech.?text|document.?content|\u6587\u7A3F/i.test(signature) && style.display !== 'none' && style.visibility !== 'hidden' && rect.width >= 180 && rect.width <= 720 && rect.height >= 140 && rect.left >= window.innerWidth * 0.35 && text.length >= 120;
         }).slice(0, 120)
       ];
-      const uniquePanels = Array.from(new Set(panelPool));
+      const uniquePanels = Array.from(new Set(panelPool.filter(Boolean)));
       uniquePanels.sort((a, b) => {
         const score = el => {
           const text = clean(el.innerText || el.textContent);
@@ -1546,7 +1605,7 @@ async function extractOnlineSubtitles(webview) {
         addCandidate('baidu-document-state', attributeCues);
         const ignoredLines = new Set(['\u89C6\u9891', '\u7B14\u8BB0', 'AI\u770B', '\u8BFE\u4EF6', '\u6587\u7A3F', '\u9009\u96C6\u67E5\u770B\u5168\u90E8']);
         const lines = String(transcriptPanel.innerText || transcriptPanel.textContent || '').split(/\n+/).map(line => line.trim()).filter(line => line && !ignoredLines.has(line));
-        const deduplicated = lines.filter((line, index) => index === 0 || line !== lines[index - 1]);
+        const deduplicated = stripTranscriptNavigationPrefix(lines.filter((line, index) => index === 0 || line !== lines[index - 1]));
         if (deduplicated.join('').length >= 80) documentPlainText = deduplicated.join('\n\n');
       }
     } catch (_) {}
@@ -1644,10 +1703,10 @@ async function extractOnlineSubtitles(webview) {
   const mediaExtendedCues = extractVisibleMediaExtendedTranscript();
   if (mediaExtendedCues.length > webviewCues.length) {
     const plainText = String((extracted == null ? void 0 : extracted.plainText) || "").split(/\n+/).map(cleanSubtitleText).filter(Boolean).join("\n\n");
-    return { source: "media-extended-transcript", cues: mediaExtendedCues, plainText, pageUrl: safeWebviewUrl(webview) };
+    return { source: "media-extended-transcript", cues: mediaExtendedCues, plainText, candidateCount: Number((extracted == null ? void 0 : extracted.candidateCount) || 0) + 1, pageUrl: safeWebviewUrl(webview) };
   }
   const plainText = String((extracted == null ? void 0 : extracted.plainText) || "").split(/\n+/).map(cleanSubtitleText).filter(Boolean).join("\n\n");
-  return { source: webviewCues.length ? (extracted == null ? void 0 : extracted.source) || "web-viewer" : plainText ? "baidu-document-text" : (extracted == null ? void 0 : extracted.source) || "web-viewer", cues: webviewCues, plainText, pageUrl: (extracted == null ? void 0 : extracted.pageUrl) || safeWebviewUrl(webview) };
+  return { source: webviewCues.length ? (extracted == null ? void 0 : extracted.source) || "web-viewer" : plainText ? "baidu-document-text" : (extracted == null ? void 0 : extracted.source) || "web-viewer", cues: webviewCues, plainText, candidateCount: Number((extracted == null ? void 0 : extracted.candidateCount) || 0), pageUrl: (extracted == null ? void 0 : extracted.pageUrl) || safeWebviewUrl(webview) };
 }
 
 // Baidu Netdisk desktop subtitle cache integration.
@@ -1727,7 +1786,7 @@ function parseSrtCues(raw) {
     }
     const text2 = body.join(" ").replace(/<br\s*\/?\s*>/gi, " ").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
     if (!text2 || !Number.isFinite(start)) continue;
-    if (start === 0 && end === 0 && text2.includes("\u6B64\u5B57\u5E55\u7531AI\u81EA\u52A8\u751F\u6210")) continue;
+    if (start <= 5 && text2.includes("\u6B64\u5B57\u5E55\u7531AI\u81EA\u52A8\u751F\u6210")) continue;
     cues.push({ start, end: Number.isFinite(end) ? end : start, text: text2 });
   }
   const unique = [];
@@ -1739,6 +1798,80 @@ function parseSrtCues(raw) {
     unique.push(cue);
   }
   return unique;
+}
+function normalizedTranscriptSpeech(value) {
+  return String(value || "").replace(/[^\p{L}\p{N}]/gu, "");
+}
+function matchTranscriptToCues(transcript, cues) {
+  if (!Array.isArray(cues) || cues.length < 5) return false;
+  const visible = normalizedTranscriptSpeech(transcript);
+  const timed = normalizedTranscriptSpeech(cues.map((cue) => cue.text).join(""));
+  if (visible.length < 400 || timed.length < 400) return false;
+  const ratio = timed.length / visible.length;
+  if (ratio < 0.8 || ratio > 1.2) return false;
+  if (!timed.startsWith(visible.slice(0, 150))) return false;
+  const sampleLength = 100;
+  const matches = [0.25, 0.5, 0.75].filter((portion) => {
+    const start = Math.floor((visible.length - sampleLength) * portion);
+    return timed.includes(visible.slice(start, start + sampleLength));
+  }).length;
+  return matches >= 2;
+}
+async function currentVaultWebCacheDir(app) {
+  const basePath = app?.vault?.adapter?.getBasePath?.();
+  const appData = node_process.env.APPDATA;
+  if (!basePath || !appData) return "";
+  try {
+    const profileRoot = node_path.join(appData, "obsidian");
+    const config = JSON.parse(await node_fs.promises.readFile(node_path.join(profileRoot, "obsidian.json"), "utf8"));
+    const normalize = (value) => {
+      const resolved = node_path.resolve(value);
+      return node_process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    };
+    const currentPath = normalize(basePath);
+    const matchingIds = Object.entries(config.vaults || {}).filter(([id, vault]) => /^[a-f\d]{16}$/i.test(id) && typeof vault?.path === "string" && normalize(vault.path) === currentPath).map(([id]) => id);
+    if (matchingIds.length !== 1) return "";
+    return node_path.join(profileRoot, "Partitions", `vault-${matchingIds[0]}`, "Cache", "Cache_Data");
+  } catch (e) {
+    return "";
+  }
+}
+async function findMatchingCachedWebviewSubtitles(app, transcript) {
+  if (normalizedTranscriptSpeech(transcript).length < 400) return null;
+  const cacheDir = await currentVaultWebCacheDir(app);
+  if (!cacheDir) return null;
+  let entries;
+  try {
+    entries = await node_fs.promises.readdir(cacheDir, { withFileTypes: true });
+  } catch (e) {
+    return null;
+  }
+  if (entries.length > 2e3) return null;
+  const matches = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !/^f_[a-f\d]+$/i.test(entry.name)) continue;
+    const cachePath = node_path.join(cacheDir, entry.name);
+    try {
+      const stat = await node_fs.promises.stat(cachePath);
+      if (stat.size < 80 || stat.size > 8 * 1024 * 1024) continue;
+      const handle = await node_fs.promises.open(cachePath, "r");
+      let header;
+      try {
+        const buffer = Buffer.alloc(Math.min(4096, stat.size));
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        header = buffer.toString("utf8", 0, bytesRead);
+      } finally {
+        await handle.close();
+      }
+      if (!/\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->/.test(header)) continue;
+      const cues = parseSrtCues(await node_fs.promises.readFile(cachePath, "utf8"));
+      if (matchTranscriptToCues(transcript, cues)) matches.push({ cues, speech: normalizedTranscriptSpeech(cues.map((cue) => cue.text).join("")) });
+    } catch (e) {
+    }
+  }
+  if (!matches.length || matches.some((match) => match.speech !== matches[0].speech)) return null;
+  matches.sort((left, right) => right.cues.length - left.cues.length);
+  return { source: "web-viewer-cache-srt", cues: matches[0].cues, plainText: "", candidateCount: matches.length };
 }
 function decodeBaiduQueryValue(value) {
   try {
@@ -1996,8 +2129,9 @@ var CourseFolderSuggestModal = class extends import_obsidian4.SuggestModal {
 // Settings UI.
 var import_obsidian2 = require("obsidian");
 var VaultFolderSuggestModal = class extends import_obsidian2.FuzzySuggestModal {
-  constructor(app, onDone) {
+  constructor(app, lastFolder, onDone) {
     super(app);
+    this.lastFolder = lastFolder;
     this.onDone = onDone;
     this.completed = false;
     this.setPlaceholder("选择笔记保存文件夹");
@@ -2005,7 +2139,10 @@ var VaultFolderSuggestModal = class extends import_obsidian2.FuzzySuggestModal {
   getItems() {
     const root = { path: "", display: "Vault 根目录" };
     const folders = this.app.vault.getAllLoadedFiles().filter((item) => item && Array.isArray(item.children)).map((item) => ({ path: item.path, display: item.path || "Vault 根目录" })).sort((a, b) => a.display.localeCompare(b.display, "zh-CN"));
-    return [root, ...folders.filter((item) => item.path)];
+    const last = folders.find((item) => item.path && item.path === this.lastFolder);
+    return last
+      ? [{ path: last.path, display: `上次选择的目录：${last.display}` }, root, ...folders.filter((item) => item.path && item.path !== last.path)]
+      : [root, ...folders.filter((item) => item.path)];
   }
   getItemText(item) {
     return item.display;
@@ -2935,7 +3072,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
   }
   chooseImportFolder() {
     return new Promise((resolve) => {
-      new VaultFolderSuggestModal(this.app, resolve).open();
+      new VaultFolderSuggestModal(this.app, this.settings.notesFolder, resolve).open();
     });
   }
   async importCurrentNote() {
@@ -3174,6 +3311,19 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
         }
         if (hasCompleteTimedSubtitles(best)) break;
         await delay(900 + attempt * 500);
+      }
+      if (!hasCompleteTimedSubtitles(best) && best.plainText) {
+        notice.setMessage("正在匹配当前视频在 Web Viewer 缓存中的完整字幕…");
+        const cached = await findMatchingCachedWebviewSubtitles(this.app, best.plainText);
+        this.addSubtitleDiagnosticAttempt({
+          attempt: 6,
+          view: 0,
+          source: cached?.source || "web-viewer-cache-none",
+          cueCount: cached?.cues.length || 0,
+          candidateCount: cached?.candidateCount || 0,
+          plainTextLength: String(best.plainText).length
+        });
+        if (cached && hasCompleteTimedSubtitles(cached)) best = cached;
       }
       if (!hasCompleteTimedSubtitles(best) && !best.plainText) {
         if (allowMissing) {

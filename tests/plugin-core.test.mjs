@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve, sep } from "node:path";
 import vm from "node:vm";
 
 const root = resolve(import.meta.dirname, "..");
@@ -67,7 +68,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, extractOnlineSubtitles, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, extractVideoPageNoteSnapshotWithRetry, waitForNewVideoUrl, findFcbWebview, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, mathMarkdownFromNode, tableCellTextWithMathTokens, parseSrtCues, matchTranscriptToCues, findMatchingCachedWebviewSubtitles, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, findVisibleTranscriptPanel, stripTranscriptNavigationPrefix, extractOnlineSubtitles, VaultFolderSuggestModal, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, extractVideoPageNoteSnapshotWithRetry, waitForNewVideoUrl, findFcbWebview, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -122,6 +123,29 @@ test("plugin onload registers its Obsidian integrations without throwing", async
   assert.match(refreshCommand.name, /刷新/);
   assert.doesNotMatch(refreshCommand.name, /同步/);
   assert.ok(instance.__registrations.length >= 1);
+});
+
+test("folder picker pins the last existing destination without duplicating it", () => {
+  const picker = Object.create(core.VaultFolderSuggestModal.prototype);
+  picker.app = { vault: { getAllLoadedFiles: () => [
+    { path: "个人笔记", children: [] },
+    { path: "Raw sources/学习/考研/数学/基础/高数", children: [] }
+  ] } };
+  picker.lastFolder = "Raw sources/学习/考研/数学/基础/高数";
+  const items = picker.getItems();
+  assert.equal(items[0].path, picker.lastFolder);
+  assert.match(items[0].display, /^上次选择的目录：/);
+  assert.equal(items.filter((item) => item.path === picker.lastFolder).length, 1);
+  assert.equal(items[1].path, "");
+});
+
+test("folder picker ignores a deleted last destination", () => {
+  const picker = Object.create(core.VaultFolderSuggestModal.prototype);
+  picker.app = { vault: { getAllLoadedFiles: () => [{ path: "个人笔记", children: [] }] } };
+  picker.lastFolder = "不存在的目录";
+  const items = picker.getItems();
+  assert.equal(items[0].path, "");
+  assert.ok(items.every((item) => !item.display.startsWith("上次选择的目录：")));
 });
 
 test("concurrent import commands are ignored until the active operation finishes", async () => {
@@ -185,6 +209,45 @@ test("image downloads reject login pages, failures and oversized responses", () 
   assert.throws(() => core.validateDownloadedImage({ status: 403, headers: { "content-type": "image/png" }, arrayBuffer: fourBytes }), /HTTP 403/);
   assert.throws(() => core.validateDownloadedImage({ status: 200, headers: { "content-type": "text\/html" }, arrayBuffer: fourBytes }), /\u975E\u56FE\u7247/);
   assert.throws(() => core.validateDownloadedImage({ status: 200, headers: { "content-type": "image/png" }, arrayBuffer: new ArrayBuffer(20 * 1024 * 1024 + 1) }), /20 MB/);
+});
+
+test("Quill and KaTeX math use semantic TeX instead of duplicated rendered text", () => {
+  const annotation = { textContent: "(k+1)!<\\left(\\frac{k+2}{2}\\right)^{k+1}" };
+  const katex = {
+    getAttribute: () => null,
+    querySelector: (selector) => selector.startsWith("annotation") ? annotation : null,
+    textContent: "(k+22)k+1(k+1)!<\\left(\\frac{k+2}{2}\\right)^{k+1}(k+1)!<(2k+2)k+1"
+  };
+  const quill = {
+    getAttribute: (name) => name === "data-value" ? "a^2>a" : null,
+    querySelector: () => null,
+    textContent: "a2>aa^2>aa2>a"
+  };
+  assert.equal(core.mathMarkdownFromNode(katex), "$" + annotation.textContent + "$");
+  assert.equal(core.mathMarkdownFromNode(quill), "$a^2>a$");
+});
+
+test("table simplification preserves formula TeX instead of flattening rendered math", () => {
+  const tokens = new Map();
+  const clone = {
+    textContent: "证明 n! < duplicated formula 的归纳证明",
+    contains: (node) => !node.replaced,
+    querySelectorAll: () => [mathNode]
+  };
+  const mathNode = {
+    replaced: false,
+    getAttribute: (name) => name === "data-value" ? "n!<\\left(\\frac{n+1}{2}\\right)^n" : null,
+    querySelector: () => null,
+    replaceWith: (node) => {
+      mathNode.replaced = true;
+      clone.textContent = clone.textContent.replace("duplicated formula", node.textContent);
+    }
+  };
+  const cell = { cloneNode: () => clone };
+  const doc = { createTextNode: (text) => ({ textContent: text }) };
+  const text = core.tableCellTextWithMathTokens(cell, doc, tokens);
+  const restored = [...tokens].reduce((value, [token, math]) => value.replaceAll(token, math), text);
+  assert.equal(restored, "证明 n! < $n!<\\left(\\frac{n+1}{2}\\right)^n$ 的归纳证明");
 });
 
 test("diagnostic reports keep useful counts and redact URLs and credentials", () => {
@@ -431,6 +494,118 @@ test("online subtitle extraction restores the AI note tab after reading transcri
   await core.extractOnlineSubtitles(webview);
   assert.match(injectedCode, /noteTabBeforeTranscript\.click\(\)/);
 });
+
+test("visible transcript text is found when Baidu's panel has no transcript class", () => {
+  const tab = { getBoundingClientRect: () => ({ left: 940, right: 990, top: 100, bottom: 130 }) };
+  const transcript = "这是一段课程文稿。".repeat(30);
+  const panel = {
+    innerText: transcript,
+    getBoundingClientRect: () => ({ left: 740, right: 1100, top: 150, bottom: 1200, width: 360, height: 1050 })
+  };
+  const video = {
+    innerText: "视频页面的其他文字。".repeat(30),
+    getBoundingClientRect: () => ({ left: 40, right: 720, top: 150, bottom: 1200, width: 680, height: 1050 })
+  };
+  const fakeDocument = { querySelectorAll: () => [video, panel] };
+  const selected = core.findVisibleTranscriptPanel(fakeDocument, tab, (value) => String(value || "").trim(),
+    () => ({ display: "block", visibility: "visible" }), 1100);
+  assert.equal(selected, panel);
+});
+
+test("subtitle diagnostics preserve the page's candidate count", async () => {
+  const webview = {
+    getURL: () => "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4",
+    executeJavaScript: async () => ({ source: "none", cues: [], plainText: "", candidateCount: 3, pageUrl: "", title: "" })
+  };
+  const result = await core.extractOnlineSubtitles(webview);
+  assert.equal(result.candidateCount, 3);
+});
+
+test("plain transcript excludes Baidu episode navigation before speech", () => {
+  const speech = "下面我们来看例题一。假设 a 是实数，那么 a 大于一是 a 方大于 a 的什么条件？";
+  const lines = ["选集", "查看全部", "00:42:59", "003 30讲零基础 一、基本逻辑02.mp4", "已看完", "00:58:39", "004 30讲零基础一、基本逻辑03.mp4", "正在播放", "最近2025-07-2", speech, "第二段讲解内容。"];
+  assert.deepEqual(core.stripTranscriptNavigationPrefix(lines), [speech, "第二段讲解内容。"]);
+  assert.deepEqual(core.stripTranscriptNavigationPrefix(["先看选集这两个字。", speech]), ["先看选集这两个字。", speech]);
+});
+
+test("cached SRT must match the beginning and several middle portions of the visible transcript", () => {
+  const parts = Array.from({ length: 20 }, (_, index) => `第${index}段讲解充分条件和必要条件的具体例子以及推导过程。`);
+  const cues = parts.map((text, index) => ({ start: index * 4, end: index * 4 + 3, text }));
+  const transcript = parts.join("。\n\n");
+  assert.equal(core.matchTranscriptToCues(transcript, cues), true);
+  const other = cues.map((cue, index) => index < 5 ? cue : { ...cue, text: `另一节课程的第${index}段内容，与当前文稿不相同。` });
+  assert.equal(core.matchTranscriptToCues(transcript, other), false);
+  assert.equal(core.matchTranscriptToCues("短文", cues), false);
+});
+
+test("cache lookup stays inside the current Vault partition and returns matching timed cues", async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "bcni-cache-"));
+  const originalAppData = process.env.APPDATA;
+  const appData = join(tempRoot, "Roaming");
+  const profileRoot = join(appData, "obsidian");
+  const currentVault = join(tempRoot, "current-vault");
+  const otherVault = join(tempRoot, "other-vault");
+  const currentId = "1111111111111111";
+  const otherId = "2222222222222222";
+  const currentCache = join(profileRoot, "Partitions", `vault-${currentId}`, "Cache", "Cache_Data");
+  const otherCache = join(profileRoot, "Partitions", `vault-${otherId}`, "Cache", "Cache_Data");
+  const parts = Array.from({ length: 30 }, (_, index) => `第${index}段讲解充分条件和必要条件的具体例子以及推导过程。`);
+  const transcript = parts.join("\n\n");
+  const srt = parts.map((text, index) => `${index + 1}\n00:00:${String(index).padStart(2, "0")}.000 --> 00:00:${String(index).padStart(2, "0")}.900\n${text}\n`).join("\n");
+  const app = { vault: { adapter: { getBasePath: () => currentVault } } };
+  try {
+    mkdirSync(currentCache, { recursive: true });
+    mkdirSync(otherCache, { recursive: true });
+    writeFileSync(join(profileRoot, "obsidian.json"), JSON.stringify({ vaults: {
+      [currentId]: { path: currentVault },
+      [otherId]: { path: otherVault }
+    } }));
+    writeFileSync(join(otherCache, "f_abc"), srt);
+    process.env.APPDATA = appData;
+    assert.equal(await core.findMatchingCachedWebviewSubtitles(app, transcript), null);
+    writeFileSync(join(currentCache, "f_def"), srt);
+    const found = await core.findMatchingCachedWebviewSubtitles(app, transcript);
+    assert.equal(found.source, "web-viewer-cache-srt");
+    assert.equal(found.cues.length, 30);
+    assert.equal(found.cues[0].text, parts[0]);
+  } finally {
+    if (originalAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = originalAppData;
+    if (resolve(tempRoot).startsWith(resolve(tmpdir()) + sep)) rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+if (process.env.BCNI_REPLAY_NOTE && process.env.BCNI_REPLAY_SRT) {
+  test("local imported note matches its cached full SRT", async () => {
+    const note = readFileSync(process.env.BCNI_REPLAY_NOTE, "utf8");
+    const section = note.split("<!-- BAIDU_AI_SUBTITLE_START -->")[1]?.split("<!-- BAIDU_AI_SUBTITLE_END -->")[0] || "";
+    const transcript = section.split("\n").filter((line) => !/^## /u.test(line) && !/^> /u.test(line)).join("\n").trim();
+    const cues = core.parseSrtCues(readFileSync(process.env.BCNI_REPLAY_SRT, "utf8"));
+    assert.ok(cues.length > 1000);
+    const normalize = (value) => value.replace(/[^\p{L}\p{N}]/gu, "");
+    const visible = normalize(transcript);
+    const timed = normalize(cues.map((cue) => cue.text).join(""));
+    const sampleHits = [0.25, 0.5, 0.75].map((portion) => timed.includes(visible.slice(Math.floor((visible.length - 100) * portion), Math.floor((visible.length - 100) * portion) + 100)));
+    assert.equal(core.matchTranscriptToCues(transcript, cues), true, JSON.stringify({ visibleLength: visible.length, timedLength: timed.length, startMatches: timed.startsWith(visible.slice(0, 150)), sampleHits, visibleStart: visible.slice(0, 160), timedStart: timed.slice(0, 160) }));
+    assert.ok(cues.at(-1).end > 3500);
+    const app = { vault: { adapter: { getBasePath: () => process.env.BCNI_REPLAY_VAULT || resolve(root, "../..") } } };
+    const found = await core.findMatchingCachedWebviewSubtitles(app, transcript);
+    assert.equal(found?.source, "web-viewer-cache-srt");
+    assert.equal(found.cues.length, cues.length);
+    const updated = core.buildOnlineSubtitleUpdate(note, "https://pan.baidu.com/pfile/video?path=%2Flesson.mp4", found);
+    assert.equal(updated.cues.length, cues.length);
+    assert.match(updated.content, /## 完整时间戳字幕/u);
+    assert.ok(updated.content.includes("#t=58:"), "expected a timestamp link near the end of the lecture");
+    assert.equal(updated.content.split("<!-- BAIDU_AI_NOTE_START -->")[1], note.split("<!-- BAIDU_AI_NOTE_START -->")[1]);
+    if (process.env.BCNI_REPLAY_OTHER_NOTE) {
+      const otherNote = readFileSync(process.env.BCNI_REPLAY_OTHER_NOTE, "utf8");
+      const otherSection = otherNote.split("<!-- BAIDU_AI_SUBTITLE_START -->")[1]?.split("<!-- BAIDU_AI_SUBTITLE_END -->")[0] || "";
+      const otherTranscript = otherSection.split("\n").filter((line) => !/^## /u.test(line) && !/^> /u.test(line)).join("\n").trim();
+      assert.equal(core.matchTranscriptToCues(otherTranscript, cues), false);
+      assert.equal(await core.findMatchingCachedWebviewSubtitles(app, otherTranscript), null);
+    }
+  });
+}
 
 test("missing AI note stops before the page is switched to transcript", async () => {
   const videoUrl = "https://pan.baidu.com/pfile/video?path=%2Fcourse%2Flesson.mp4";
