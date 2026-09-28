@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.13
+
+- Follow Baidu's `M3U8_SUBTITLE_SRT` subtitle playlist to retrieve the linked SRT and validate it against the visible transcript before adding timestamps.
+- Keep subtitle API requests even when their query parameters contain a video filename; only exclude actual media files by URL path.
+- Verify the full playlist-to-SRT extraction chain with a simulated Web Viewer page.
+
 ## 0.5.12
 
 - Recover full timestamped SRT from the current Vault's Obsidian Web Viewer cache when the page exposes only plain transcript text. Match the beginning, length and multiple middle passages before accepting a cache entry, and reject ambiguous matches.

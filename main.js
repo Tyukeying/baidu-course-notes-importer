@@ -1282,6 +1282,7 @@ function subtitleSourceLabel(source) {
   const labels = {
     "player-text-track": "\u64AD\u653E\u5668\u5B57\u5E55\u8F68\u9053",
     "media-extended-transcript": "Media Extended Transcript",
+    "network-hls-subtitle": "\u767E\u5EA6\u5B57\u5E55\u6E05\u5355 SRT",
     "network-timed-text": "\u7F51\u9875 SRT/VTT \u8D44\u6E90",
     "network-json": "\u7F51\u9875\u5B57\u5E55\u6570\u636E",
     "page-state": "\u767E\u5EA6\u9875\u9762\u6570\u636E",
@@ -1327,7 +1328,7 @@ function selectSubtitleResourceUrls(entries) {
       continue;
     }
     if (!/^https?:$/.test(url.protocol) || !allowedHost(url.hostname.toLowerCase())) continue;
-    if (/\.(?:mp4|m4s|m3u8|ts|flv|mp3|aac|jpg|jpeg|png|gif|webp|woff2?|css|js)(?:\?|$)/i.test(value)) continue;
+    if (/\.(?:mp4|m4s|m3u8|ts|flv|mp3|aac|jpg|jpeg|png|gif|webp|woff2?|css|js)$/i.test(url.pathname)) continue;
     if (/subtitle|caption|transcript|\.srt(?:\?|$)|\.vtt(?:\?|$)|speech|audio.?text|ai.?text|(?:fsid=.*fn=|fn=.*fsid=)/i.test(value)) {
       explicit.push(value);
     } else if (/^(fetch|xmlhttprequest)$/i.test(String(entry && entry.initiatorType || ""))) {
@@ -1335,6 +1336,31 @@ function selectSubtitleResourceUrls(entries) {
     }
   }
   return Array.from(new Set([...explicit.slice(-24), ...fallback.slice(-8)]));
+}
+function subtitleUrlsFromHls(raw, manifestUrl) {
+  if (!String(raw || "").startsWith("#EXTM3U")) return [];
+  const lines = String(raw).split(/\r?\n/);
+  const urls = [];
+  const allowedHost = (hostname) => hostname === "baidu.com" || hostname.endsWith(".baidu.com") || hostname === "bcebos.com" || hostname.endsWith(".bcebos.com") || hostname === "baidubce.com" || hostname.endsWith(".baidubce.com") || hostname === "bdstatic.com" || hostname.endsWith(".bdstatic.com") || hostname === "baidupcs.com" || hostname.endsWith(".baidupcs.com");
+  for (let index = 0; index < lines.length && urls.length < 12; index += 1) {
+    const line = lines[index].trim();
+    if (!/^#EXT-X-MEDIA:TYPE=SUBTITLES(?:,|$)/i.test(line)) continue;
+    let target = /(?:^|,)URI="([^"]+)"/i.exec(line)?.[1] || "";
+    if (!target) {
+      for (let next = index + 1; next < Math.min(lines.length, index + 4); next += 1) {
+        const candidate = lines[next].trim();
+        if (!candidate) continue;
+        if (!candidate.startsWith("#")) target = candidate;
+        break;
+      }
+    }
+    if (!target) continue;
+    try {
+      const url = new URL(target, manifestUrl);
+      if (/^https?:$/.test(url.protocol) && allowedHost(url.hostname.toLowerCase()) && !urls.includes(url.href)) urls.push(url.href);
+    } catch (_) {}
+  }
+  return urls;
 }
 function findVisibleTranscriptPanel(pageDocument, transcriptTab, clean, getStyle, viewportWidth) {
   if (!transcriptTab) return null;
@@ -1368,6 +1394,9 @@ function stripTranscriptNavigationPrefix(lines) {
 async function extractOnlineSubtitles(webview) {
   const code = String.raw`(async () => {
     const selectSubtitleResourceUrls = ${selectSubtitleResourceUrls.toString()};
+    const subtitleUrlsFromHls = ${subtitleUrlsFromHls.toString()};
+    const normalizedTranscriptSpeech = ${normalizedTranscriptSpeech.toString()};
+    const matchTranscriptToCues = ${matchTranscriptToCues.toString()};
     const findVisibleTranscriptPanel = ${findVisibleTranscriptPanel.toString()};
     const stripTranscriptNavigationPrefix = ${stripTranscriptNavigationPrefix.toString()};
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -1633,7 +1662,8 @@ async function extractOnlineSubtitles(webview) {
           body.push(lines[index]);
           index += 1;
         }
-        cues.push({ start: toSeconds(match[1]), end: toSeconds(match[2]), text: body.join(' ') });
+        const text = body.join(' ');
+        if (!(toSeconds(match[1]) <= 5 && text.includes('\u6B64\u5B57\u5E55\u7531AI\u81EA\u52A8\u751F\u6210'))) cues.push({ start: toSeconds(match[1]), end: toSeconds(match[2]), text });
       }
       if (!cues.length) {
         const lrcPattern = /^\s*\[(\d{1,3}):(\d{2}(?:[.:]\d{1,3})?)\]\s*(.+?)\s*$/;
@@ -1665,6 +1695,18 @@ async function extractOnlineSubtitles(webview) {
         if (!raw || raw.length > 12 * 1024 * 1024) continue;
         const timed = parseTimedText(raw);
         if (timed.length) addCandidate('network-timed-text', timed);
+        for (const subtitleUrl of subtitleUrlsFromHls(raw, url)) {
+          try {
+            const subtitleResponse = await fetch(subtitleUrl, { credentials: 'include' });
+            if (!subtitleResponse.ok || /^(video|audio|image|font)\//i.test(subtitleResponse.headers.get('content-type') || '')) continue;
+            const subtitleLength = Number(subtitleResponse.headers.get('content-length') || 0);
+            if (subtitleLength > 8 * 1024 * 1024) continue;
+            const subtitleRaw = await subtitleResponse.text();
+            if (!subtitleRaw || subtitleRaw.length > 8 * 1024 * 1024) continue;
+            const linkedCues = parseTimedText(subtitleRaw);
+            if (linkedCues.length >= 5 && (!documentPlainText || matchTranscriptToCues(documentPlainText, linkedCues))) addCandidate('network-hls-subtitle', linkedCues);
+          } catch (_) {}
+        }
         if (/^[\s\[{]/.test(raw) || /^[\w$]+\s*\(/.test(raw)) {
           try {
             discovered.length = 0;
@@ -1679,6 +1721,7 @@ async function extractOnlineSubtitles(webview) {
 
     const sourcePriority = source => ({
       'player-text-track': 50,
+      'network-hls-subtitle': 45,
       'network-timed-text': 40,
       'network-json': 30,
       'baidu-document-state': 20,
@@ -3273,6 +3316,7 @@ var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
       let best = { source: "none", cues: [], plainText: "" };
       const sourcePriority = (source) => ({
         "player-text-track": 50,
+        "network-hls-subtitle": 45,
         "network-timed-text": 40,
         "network-json": 30,
         "media-extended-transcript": 25,

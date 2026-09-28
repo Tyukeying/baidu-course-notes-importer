@@ -68,7 +68,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, mathMarkdownFromNode, tableCellTextWithMathTokens, parseSrtCues, matchTranscriptToCues, findMatchingCachedWebviewSubtitles, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, findVisibleTranscriptPanel, stripTranscriptNavigationPrefix, extractOnlineSubtitles, VaultFolderSuggestModal, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, extractVideoPageNoteSnapshotWithRetry, waitForNewVideoUrl, findFcbWebview, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, mathMarkdownFromNode, tableCellTextWithMathTokens, parseSrtCues, matchTranscriptToCues, findMatchingCachedWebviewSubtitles, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, subtitleUrlsFromHls, findVisibleTranscriptPanel, stripTranscriptNavigationPrefix, extractOnlineSubtitles, VaultFolderSuggestModal, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, extractVideoPageNoteSnapshotWithRetry, waitForNewVideoUrl, findFcbWebview, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -346,6 +346,23 @@ test("subtitle resource selection prefers bounded Baidu candidates", () => {
   assert.ok(urls.every((url) => !url.includes("evil.example") && !url.endsWith("player.js")));
 });
 
+test("Baidu's subtitle streaming manifest exposes a bounded SRT URL", () => {
+  const manifestUrl = "https://pan.baidu.com/api/streaming?type=M3U8_SUBTITLE_SRT&fsid=123";
+  const manifest = [
+    "#EXTM3U",
+    '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="中文字幕",AI-SUB="YES"',
+    "https://bdcm06.baidupcs.com/video/subtitle/lesson.srt?sign=abc",
+    '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="other",URI="https://evil.example/other.srt"',
+    '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="relative",URI="/video/relative.srt"'
+  ].join("\n");
+  assert.deepEqual(core.subtitleUrlsFromHls(manifest, manifestUrl), [
+    "https://bdcm06.baidupcs.com/video/subtitle/lesson.srt?sign=abc",
+    "https://pan.baidu.com/video/relative.srt"
+  ]);
+  assert.deepEqual(core.subtitleUrlsFromHls("#EXTM3U\n#EXTINF:10\nsegment.ts", manifestUrl), []);
+  assert.ok(core.selectSubtitleResourceUrls([{ name: manifestUrl, initiatorType: "xmlhttprequest" }]).includes(manifestUrl));
+});
+
 test("a single trusted cue is not accepted as a complete transcript", () => {
   assert.equal(core.hasCompleteTimedSubtitles({ source: "network-json", cues: [{ start: 0, text: "partial" }] }), false);
   assert.equal(core.hasCompleteTimedSubtitles({ source: "network-json", cues: Array.from({ length: 5 }, (_, start) => ({ start, text: String(start) })) }), true);
@@ -493,6 +510,62 @@ test("online subtitle extraction restores the AI note tab after reading transcri
   };
   await core.extractOnlineSubtitles(webview);
   assert.match(injectedCode, /noteTabBeforeTranscript\.click\(\)/);
+});
+
+test("online extraction follows Baidu HLS subtitle manifest and verifies the visible transcript", async () => {
+  const speech = Array.from({ length: 24 }, (_, index) => `第${index}段我们认真讲解数学概念和演算步骤并且检查每一步是否成立`);
+  const transcript = speech.join("。\n");
+  const timestamp = (seconds) => `00:${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")},000`;
+  const srt = ["1\n00:00:00,000 --> 00:00:01,000\n此字幕由AI自动生成", ...speech.map((line, index) =>
+    `${index + 2}\n${timestamp(index * 3 + 2)} --> ${timestamp(index * 3 + 4)}\n${line}`)].join("\n\n");
+  const manifestUrl = "https://pan.baidu.com/api/streaming?type=M3U8_SUBTITLE_SRT&path=%2F005.mp4";
+  const subtitleUrl = "https://d.pcs.baidu.com/file/005.srt";
+  const manifest = `#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="AI"\n${subtitleUrl}\n`;
+  const panel = {
+    id: "transcript", className: "transcript-panel", innerText: transcript, textContent: transcript,
+    scrollHeight: 800, attributes: [], querySelectorAll: () => [],
+    getAttribute: () => null,
+    getBoundingClientRect: () => ({ left: 780, right: 1080, top: 150, bottom: 950, width: 300, height: 800 })
+  };
+  const tab = {
+    id: "transcript-tab", tagName: "BUTTON", className: "active", textContent: "文稿",
+    getAttribute: (name) => name === "aria-controls" ? "transcript" : null,
+    closest: () => tab,
+    getBoundingClientRect: () => ({ left: 950, right: 990, top: 100, bottom: 130, width: 40, height: 30 }),
+    click: () => {}
+  };
+  const fakeDocument = {
+    title: "005", defaultView: { performance: { getEntriesByType: () => [{ name: manifestUrl, initiatorType: "fetch" }] } },
+    getElementById: (id) => id === "transcript" ? panel : null,
+    querySelectorAll: (selector) => {
+      if (selector.startsWith("button,")) return [tab];
+      if (selector === "div, section, article" || selector.startsWith("div, section, article,")) return [panel];
+      if (selector.includes("transcript") && !selector.includes("data-start")) return [panel];
+      return [];
+    }
+  };
+  const requests = [];
+  const context = {
+    URL,
+    document: fakeDocument,
+    window: { innerWidth: 1100 },
+    location: { href: "https://pan.baidu.com/pfile/video?path=%2F005.mp4" },
+    getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+    setTimeout: (callback) => callback(),
+    fetch: async (url) => {
+      requests.push(url);
+      return { ok: true, headers: { get: () => "text/plain" }, text: async () => url === manifestUrl ? manifest : srt };
+    }
+  };
+  const webview = {
+    getURL: () => context.location.href,
+    executeJavaScript: (code) => vm.runInNewContext(code, context)
+  };
+  const result = await core.extractOnlineSubtitles(webview);
+  assert.deepEqual(requests, [manifestUrl, subtitleUrl]);
+  assert.equal(result.source, "network-hls-subtitle");
+  assert.equal(result.cues.length, speech.length);
+  assert.equal(result.cues[0].start, 2);
 });
 
 test("visible transcript text is found when Baidu's panel has no transcript class", () => {
