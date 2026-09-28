@@ -947,7 +947,24 @@ function simplifyQuillTables(root2, doc, mathTokens) {
 }
 function polishMarkdown(markdown) {
   let result = markdown.replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, "").replace(/^以下为AI生成的图文笔记的内容\s*$/m, "").replace(/^(#{4,6})(\s+)/gm, (_match, hashes, space) => `${"#".repeat(hashes.length - 2)}${space}`).replace(/^(#{2,4}\s+[^\n]+)\n\n(<span class="baidu-ai-timestamp"[^>]*>[^<]+<\/span>)/gm, "$1 $2").replace(/^(#{2,4}\s+[^\n]+)\n\n(\[[^\]\n]+\]\(https:\/\/pan\.baidu\.com\/pfile\/video[^\n]*#t=[^)]+\))/gm, "$1 $2").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
-  return result;
+  return repairDetachedListsAfterImages(result);
+}
+function repairDetachedListsAfterImages(markdown) {
+  const lines = String(markdown || "").split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index].trim().startsWith("![")) continue;
+    let first = index + 1;
+    while (first < lines.length && !lines[first].trim()) first += 1;
+    const firstList = /^( {4,})(?:[-+*]|\d+[.)])\s/.exec(lines[first] || "");
+    if (!firstList) continue;
+    const remove = firstList[1].length;
+    for (let current = first; current < lines.length && lines[current].trim(); current += 1) {
+      const indentation = /^( *)/.exec(lines[current])[1].length;
+      if (indentation < remove) break;
+      lines[current] = lines[current].slice(remove);
+    }
+  }
+  return lines.join("\n");
 }
 async function localizeImages(root2, options) {
   const images = Array.from(root2.querySelectorAll("img[src]"));
@@ -1006,12 +1023,21 @@ function validateDownloadedImage(response) {
   const headers = response && response.headers && typeof response.headers === "object" ? response.headers : {};
   const contentTypeEntry = Object.entries(headers).find(([key]) => key.toLowerCase() === "content-type");
   const contentType = String(contentTypeEntry ? contentTypeEntry[1] : "").split(";")[0].trim().toLowerCase();
-  if (contentType && !/^image\/(?:jpeg|png|gif|webp|svg\+xml|avif)$/.test(contentType)) throw new Error(`\u56FE\u7247\u94FE\u63A5\u8FD4\u56DE\u4E86\u975E\u56FE\u7247\u5185\u5BB9\uFF08${contentType}\uFF09`);
   const data = response == null ? void 0 : response.arrayBuffer;
   const size = data && typeof data.byteLength === "number" ? data.byteLength : 0;
   if (size < 4) throw new Error("\u56FE\u7247\u5185\u5BB9\u4E3A\u7A7A\u6216\u4E0D\u5B8C\u6574");
   if (size > 20 * 1024 * 1024) throw new Error("\u5355\u5F20\u56FE\u7247\u8D85\u8FC7 20 MB \u5B89\u5168\u4E0A\u9650");
-  return { data, contentType };
+  let verifiedType = contentType;
+  if (!contentType || /^(?:application\/(?:octet-stream|x-octet-stream|binary)|binary\/octet-stream)$/.test(contentType)) {
+    const bytes = new Uint8Array(data, 0, Math.min(size, 16));
+    if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) verifiedType = "image/jpeg";
+    else if (bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte)) verifiedType = "image/png";
+    else if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)).match(/^GIF8[79]a$/)) verifiedType = "image/gif";
+    else if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") verifiedType = "image/webp";
+    else if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(4, 8)) === "ftyp" && /^(?:avif|avis)$/.test(String.fromCharCode(...bytes.slice(8, 12)))) verifiedType = "image/avif";
+  }
+  if (!/^image\/(?:jpeg|png|gif|webp|svg\+xml|avif)$/.test(verifiedType)) throw new Error(`\u56FE\u7247\u94FE\u63A5\u8FD4\u56DE\u4E86\u975E\u56FE\u7247\u5185\u5BB9\uFF08${contentType || "unknown"}\uFF09`);
+  return { data, contentType: verifiedType };
 }
 function safeRemoteImageUrl(value) {
   try {
@@ -2919,7 +2945,15 @@ function buildVideoNoteContentUpdate(content, markdown, videoUrl, subtitleResult
     const replacement = `${START_MARKER}\n${markdown}\n${END_MARKER}`;
     nextContent = nextContent.includes(START_MARKER) && nextContent.includes(END_MARKER) ? replaceSectionBetweenMarkers(nextContent, START_MARKER, END_MARKER, replacement) : `${nextContent.replace(/\s+$/, "")}\n\n${replacement}\n`;
   }
+  nextContent = repairManagedAiNoteLayout(nextContent);
   return buildOnlineSubtitleUpdate(nextContent, videoUrl, subtitleResult, importedAt);
+}
+function repairManagedAiNoteLayout(content) {
+  const start = content.indexOf(START_MARKER);
+  const end = content.indexOf(END_MARKER, start + START_MARKER.length);
+  if (start < 0 || end < 0) return content;
+  const bodyStart = start + START_MARKER.length;
+  return content.slice(0, bodyStart) + repairDetachedListsAfterImages(content.slice(bodyStart, end)) + content.slice(end);
 }
 var NetdiskAiNotesPlugin = class extends import_obsidian4.Plugin {
   constructor() {
@@ -3814,7 +3848,7 @@ ${synchronizedMarkdown}
 ${END_MARKER}`;
       const legacyTitle = file.basename.endsWith(".fcb") || file.basename === "\u767E\u5EA6\u7F51\u76D8\u5728\u7EBF\u6587\u6863";
       const baseContent = legacyTitle ? oldContent.replace(/^#\s+[^\n]+$/m, `# ${snapshot.title}`) : oldContent;
-      const newContent = replaceManagedSection(baseContent, replacement);
+      const newContent = repairManagedAiNoteLayout(replaceManagedSection(baseContent, replacement));
       await this.app.vault.modify(file, newContent);
       await this.app.fileManager.processFrontMatter(file, (fm) => {
         if (videoUrl) fm.video_url = videoUrl;
@@ -4036,14 +4070,14 @@ ${END_MARKER}`;
       `imported_at: ${yamlString((/* @__PURE__ */ new Date()).toISOString())}`,
       "---"
     ].join("\n");
-    return `${frontmatter}
+    return repairManagedAiNoteLayout(`${frontmatter}
 
 # ${title}
 
 ${START_MARKER}
 ${markdown}
 ${END_MARKER}
-`;
+`);
   }
   composeVideoNote(title, videoUrl, markdown, fcbUrl, noteSource) {
     const frontmatter = [
@@ -4058,14 +4092,14 @@ ${END_MARKER}
       `imported_at: ${yamlString((/* @__PURE__ */ new Date()).toISOString())}`,
       "---"
     ].join("\n");
-    return `${frontmatter}
+    return repairManagedAiNoteLayout(`${frontmatter}
 
 # ${title}
 
 ${START_MARKER}
 ${markdown}
 ${END_MARKER}
-`;
+`);
   }
   async createNotePath(title, targetFolder = this.settings.notesFolder) {
     const folder = (0, import_obsidian4.normalizePath)(String(targetFolder || "").trim().replace(/^[/\\]+|[/\\]+$/g, ""));

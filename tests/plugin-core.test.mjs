@@ -68,7 +68,7 @@ function obsidianStub() {
 
 function loadBundle() {
   const filename = resolve(root, "main.js");
-  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, mathMarkdownFromNode, tableCellTextWithMathTokens, parseSrtCues, matchTranscriptToCues, findMatchingCachedWebviewSubtitles, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, subtitleUrlsFromHls, findVisibleTranscriptPanel, stripTranscriptNavigationPrefix, extractOnlineSubtitles, VaultFolderSuggestModal, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, extractVideoPageNoteSnapshotWithRetry, waitForNewVideoUrl, findFcbWebview, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
+  const source = `${readFileSync(filename, "utf8")}\nmodule.exports.__test = { localizeImages, validateDownloadedImage, safeRemoteImageUrl, stableImageIdentity, attachmentFolderForNoteFolder, mathMarkdownFromNode, tableCellTextWithMathTokens, repairDetachedListsAfterImages, parseSrtCues, matchTranscriptToCues, findMatchingCachedWebviewSubtitles, normalizePluginSettings, normalizeOnlineCues, hasCompleteTimedSubtitles, selectSubtitleResourceUrls, subtitleUrlsFromHls, findVisibleTranscriptPanel, stripTranscriptNavigationPrefix, extractOnlineSubtitles, VaultFolderSuggestModal, managedSection, replaceOrInsertManagedSection, buildOnlineSubtitleUpdate, buildVideoNoteContentUpdate, extractVideoPageNoteSnapshotWithRetry, waitForNewVideoUrl, findFcbWebview, sameVideo, getQueryPath, isVideoUrl, isFcbUrl, redactDiagnosticText, safeErrorMessage, formatImportDiagnostics };`;
   const module = { exports: {} };
   const localRequire = (id) => {
     if (id === "obsidian") return obsidianStub();
@@ -209,6 +209,17 @@ test("image downloads reject login pages, failures and oversized responses", () 
   assert.throws(() => core.validateDownloadedImage({ status: 403, headers: { "content-type": "image/png" }, arrayBuffer: fourBytes }), /HTTP 403/);
   assert.throws(() => core.validateDownloadedImage({ status: 200, headers: { "content-type": "text\/html" }, arrayBuffer: fourBytes }), /\u975E\u56FE\u7247/);
   assert.throws(() => core.validateDownloadedImage({ status: 200, headers: { "content-type": "image/png" }, arrayBuffer: new ArrayBuffer(20 * 1024 * 1024 + 1) }), /20 MB/);
+  const baiduJpeg = Uint8Array.from([255, 216, 255, 224, 0, 16, 74, 70, 73, 70]).buffer;
+  assert.equal(core.validateDownloadedImage({ status: 200, headers: { "content-type": "application/octet-stream" }, arrayBuffer: baiduJpeg }).contentType, "image/jpeg");
+  assert.throws(() => core.validateDownloadedImage({ status: 200, headers: { "content-type": "application/octet-stream" }, arrayBuffer: new TextEncoder().encode("<html>login</html>").buffer }), /\u975E\u56FE\u7247/);
+});
+
+test("AI note image breaks do not turn following formulas into code blocks", () => {
+  const source = "- 例题：有理化计算\n  - 例题12：函数倒数求和\n\n![](https://pan.baidu.com/image.jpg)\n\n    - 题目解析\n      - **函数定义**：$f(x)=\\sqrt{x}+\\sqrt{x+1}$\n      - **答案**：$\\sqrt{n+1}-1$";
+  const repaired = core.repairDetachedListsAfterImages(source);
+  assert.match(repaired, /!\[\]\(https:\/\/pan\.baidu\.com\/image\.jpg\)\n\n- 题目解析\n  - \*\*函数定义\*\*：\$f\(x\)=\\sqrt\{x\}\+\\sqrt\{x\+1\}\$/);
+  assert.doesNotMatch(repaired, /\n    - 题目解析/);
+  assert.equal(core.repairDetachedListsAfterImages("- 主项\n  - 子项"), "- 主项\n  - 子项");
 });
 
 test("Quill and KaTeX math use semantic TeX instead of duplicated rendered text", () => {
@@ -413,6 +424,17 @@ test("video note content combines refreshed AI text and subtitles in one transfo
   assert.equal((update.content.match(/BAIDU_AI_NOTE_START/g) || []).length, 1);
   assert.equal((update.content.match(/BAIDU_AI_SUBTITLE_START/g) || []).length, 1);
   assert.ok(update.content.indexOf("BAIDU_AI_SUBTITLE_START") < update.content.indexOf("BAIDU_AI_NOTE_START"));
+});
+
+test("final video note write repairs orphaned formula lists inside the AI section", () => {
+  const videoUrl = "https://pan.baidu.com/pfile/video?path=%2F006.mp4";
+  const original = "# lesson\n\n<!-- BAIDU_AI_NOTE_START -->\nold\n<!-- BAIDU_AI_NOTE_END -->\n";
+  const aiNote = "- 例题\n\n![[notes/006.jpg]]\n\n    - 题目解析\n      - **定义**：$f(x)=\\sqrt{x}$";
+  const subtitles = { source: "web-viewer-cache-srt", cues: [{ start: 2, end: 3, text: "cue" }], plainText: "" };
+  const update = core.buildVideoNoteContentUpdate(original, aiNote, videoUrl, subtitles, "2026-09-28T00:00:00.000Z");
+  assert.match(update.content, /!\[\[notes\/006\.jpg\]\]\n\n- 题目解析\n  - \*\*定义\*\*：\$f\(x\)=\\sqrt\{x\}\$/);
+  assert.doesNotMatch(update.content, /\n    - 题目解析/);
+  assert.equal((update.content.match(/BAIDU_AI_NOTE_START/g) || []).length, 1);
 });
 
 test("video identity uses Baidu path instead of expiring query parameters", () => {

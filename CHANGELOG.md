@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.14
+
+- Repair nested AI-note lists detached by image blocks, so formulas and bold text render as Markdown rather than code.
+- Accept Baidu images served as `application/octet-stream` only when their bytes match a supported image signature; continue rejecting HTML and other non-image responses.
+
 ## 0.5.13
 
 - Follow Baidu's `M3U8_SUBTITLE_SRT` subtitle playlist to retrieve the linked SRT and validate it against the visible transcript before adding timestamps.
